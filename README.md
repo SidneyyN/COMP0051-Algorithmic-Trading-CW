@@ -18,13 +18,14 @@ comp0051-coursework/
 │   └── risk_free/               # Risk-free rate data (Fed Funds rate)
 │
 ├── notebooks/
-│   ├── 01_data_download.py      # Data acquisition and cleaning
-│   ├── 02_eda.py                # Exploratory data analysis
-│   ├── 03_breakout_strategy.py  # Breakout/trend-following strategy
-│   ├── 04_leadlag_strategy.py   # Lead-lag/causal strategy
-│   ├── 05_transaction_costs.py  # Roll model and slippage estimation
-│   ├── 06_performance.py        # PnL, metrics, and final evaluation
-│   └── 07_visualisations.py     # Charts and plots for the report
+│   ├── 01_data_download.py      # Data acquisition (Binance klines + FRED risk-free rate)
+│   ├── 02_data_clean.py         # Data cleaning, excess returns, save to parquet
+│   ├── 03_eda.py                # Exploratory data analysis
+│   ├── 04_breakout_strategy.py  # Breakout/trend-following strategy
+│   ├── 05_leadlag_strategy.py   # Lead-lag/causal strategy
+│   ├── 06_transaction_costs.py  # Roll model and slippage estimation
+│   ├── 07_performance.py        # PnL, metrics, and final evaluation
+│   └── 08_visualisations.py     # Charts and plots for the report
 │
 ├── src/
 │   ├── data_utils.py            # Data loading, cleaning, return computation
@@ -55,11 +56,14 @@ comp0051-coursework/
 - **15-minute bars** — chosen because:
   - Lead-lag effects between BTC and alts typically play out over 15–60 minutes
   - Enough granularity to capture intraday breakouts
-  - ~35,000 bars per asset over ~3 months (well above the 1,000-bar minimum)
+  - ~17,500 bars per asset over 6 months (well above the 1,000-bar minimum)
 
 ### Time Period
-- Target: **3–6 months** of recent data
-- Split: ~70% in-sample (parameter fitting), ~30% out-of-sample (validation)
+- **September 1, 2025 – February 28, 2026** (6 complete months)
+- ~17,500 bars per asset (6 × ~30 × 24 × 4)
+- **In-sample**: Sep 1, 2025 – Dec 31, 2025 (~4 months, ~67%)
+- **Out-of-sample**: Jan 1, 2026 – Feb 28, 2026 (~2 months, ~33%)
+- Rationale: clean calendar boundaries, fully complete data, recent enough to reflect current market microstructure, avoids cherry-picking
 
 ### Data Pipeline
 1. Download raw 15-min klines from `data.binance.vision` (public, no API key needed)
@@ -220,15 +224,16 @@ requests         # for downloading data / risk-free rate from FRED
 
 ## Workflow
 
-1. **Data pipeline** → `01_data_download.py`
-2. **Exploratory analysis** → `02_eda.py` (stationarity, cross-correlations, cointegration)
-3. **Strategy 1** → `03_breakout_strategy.py`
-4. **Strategy 2** → `04_leadlag_strategy.py`
-5. **Transaction costs** → `05_transaction_costs.py`
-6. **Performance** → `06_performance.py`
-7. **Visualisations** → `07_visualisations.py`
-8. **Report writing** → compile into 5-page PDF
-9. **Video** → 60-second presentation to camera
+1. **Data download** → `01_data_download.py`
+2. **Data cleaning** → `02_data_clean.py`
+3. **Exploratory analysis** → `03_eda.py` (stationarity, cross-correlations, cointegration)
+4. **Strategy 1** → `04_breakout_strategy.py`
+5. **Strategy 2** → `05_leadlag_strategy.py`
+6. **Transaction costs** → `06_transaction_costs.py`
+7. **Performance** → `07_performance.py`
+8. **Visualisations** → `08_visualisations.py`
+9. **Report writing** → compile into 5-page PDF
+10. **Video** → 60-second presentation to camera
 
 ---
 
