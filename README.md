@@ -68,10 +68,23 @@ comp0051-coursework/
 ### Data Pipeline
 1. Download raw 15-min klines from `data.binance.vision` (public, no API key needed)
 2. Columns: Open time, Open, High, Low, Close, Volume (+ additional fields we may discard)
-3. Clean data: check for missing bars, handle NaN/zero volume, detect and repair outliers (e.g., wicks > 5 standard deviations from rolling mean)
+3. Clean data: check for missing bars, handle NaN/zero volume, detect outliers (read section below for more details)
 4. Store cleaned data as `.parquet`
 5. Download Effective Federal Funds Rate from FRED (Federal Reserve Economic Data)
 6. Compute excess simple returns: `r_e_t = (p_t - p_{t-1}) / p_{t-1} - r_f_{t-1}`
+
+### Data Cleaning
+
+Raw data is checked for missing timestamps, duplicate entries, and basic integrity issues (e.g., zero or negative prices). All timestamps are aligned across assets.
+
+Outliers are identified using extreme return thresholds (e.g., returns exceeding a multiple of rolling standard deviation). However, cryptocurrency markets are known to exhibit genuine large price movements, particularly during periods of high volatility.
+
+Therefore, **outliers are not automatically removed or adjusted**. Instead:
+- Each flagged observation is inspected in context (neighbouring bars, volume, and market behaviour)
+- Corrections are only applied if the anomaly is clearly attributable to a data error (e.g., isolated spikes inconsistent with surrounding data)
+- Otherwise, extreme observations are retained as valid market events
+
+This ensures that the dataset preserves true market dynamics while avoiding distortions from erroneous data.
 
 ### Risk-Free Rate Discussion
 At 15-minute frequency, the per-bar risk-free rate is negligible. With an annual rate of ~5%, the 15-min rate is approximately 5% / (365.25 × 24 × 4) ≈ 0.000014% per bar. This is orders of magnitude smaller than typical crypto returns (which can move 0.1–1% in 15 minutes). We compute it for completeness but argue it can be safely ignored.
@@ -100,9 +113,18 @@ Cryptocurrency markets exhibit momentum and trend persistence due to:
 - Exit rules: trailing stop vs opposite channel vs time-based exit
 
 ### Position Sizing
-- Use volatility targeting: size positions inversely proportional to recent ATR
-- Apply MVO (Mean-Variance Optimisation) or a simplified cost-aware method to allocate across BTC/ETH/DOGE
-- Respect the $100,000 gross exposure cap at all times
+
+We adopt a **volatility scaling and exposure cap** approach to ensure robust and interpretable position sizing.
+
+- Positions are scaled inversely with recent volatility (measured using ATR or rolling standard deviation of returns), such that more volatile assets receive smaller allocations.
+- Signal strength (e.g., breakout strength or magnitude of BTC move in lead-lag) can be incorporated as a multiplier to increase exposure when signals are stronger.
+- At each time step, raw position sizes are normalised to satisfy the coursework constraint:
+  \[
+  \sum_i |\theta_t^i| \le 100{,}000
+  \]
+  ensuring total gross exposure does not exceed \$100,000.
+
+This approach avoids the instability of full mean-variance optimisation while remaining cost-aware and suitable for high-frequency data. It also reflects practical trading systems, where risk is controlled via volatility targeting and strict exposure limits.
 
 ### Assets Traded
 - All three: BTC, ETH, DOGE (breakout signals generated independently per asset)
@@ -130,9 +152,18 @@ BTC is the dominant cryptocurrency and tends to be the first to react to market-
 - Exit timing (fixed hold period vs signal-based exit)
 
 ### Position Sizing
-- Size proportional to signal strength (magnitude of BTC move) and inversely proportional to lagging asset's volatility
-- Apply MVO or cost-aware optimisation
-- Respect $100,000 gross exposure cap
+
+We adopt a **volatility scaling and exposure cap** approach to ensure robust and interpretable position sizing.
+
+- Positions are scaled inversely with recent volatility (measured using ATR or rolling standard deviation of returns), such that more volatile assets receive smaller allocations.
+- Signal strength (e.g., breakout strength or magnitude of BTC move in lead-lag) can be incorporated as a multiplier to increase exposure when signals are stronger.
+- At each time step, raw position sizes are normalised to satisfy the coursework constraint:
+  \[
+  \sum_i |\theta_t^i| \le 100{,}000
+  \]
+  ensuring total gross exposure does not exceed \$100,000.
+
+This approach avoids the instability of full mean-variance optimisation while remaining cost-aware and suitable for high-frequency data. It also reflects practical trading systems, where risk is controlled via volatility targeting and strict exposure limits.
 
 ### Assets Traded
 - Signal asset: BTC (observe only, may or may not trade)

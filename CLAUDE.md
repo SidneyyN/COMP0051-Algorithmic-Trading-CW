@@ -41,15 +41,18 @@ Two cryptocurrency trading strategies backtested on Binance 15-min OHLCV data.
 
 ### Stage 1 — Data Pipeline (`notebooks/`)
 - [x] `01_data_download.py` — Download 15-min klines from data.binance.vision + EFFR from FRED
-- [ ] `02_data_clean.py` — Clean OHLCV, compute excess returns, save parquet ← **CURRENT**
-  - Known issue: timestamp parsing bug causing a massive full_index (17M missing bars).
-    Root cause unresolved after multiple fixes; likely a pandas 2.x / Python 3.13
-    interaction with the raw open_time int64 values from the saved CSV.
-    Next step: add a diagnostic print of raw open_time values and their parsed datetimes
-    before the reindex step to confirm whether the dtype/values are correct.
+- [x] `02_data_clean.py` — Clean OHLCV, compute excess returns, save parquet
+  - Timestamp bug fixed: raw CSVs use microseconds (16-digit), not milliseconds.
+    Auto-detection added (>1e14 → divide by 1000 → unit="ms").
+  - Output: single wide `data/cleaned/cleaned_data.parquet` (17,375 × 22 cols).
+  - Outliers flagged (log only, not removed): 7 BTC, 9 ETH, 12 DOGE.
+  - Notable: DOGE Oct 10 2025 flash crash (-6%, -8%, -16% over 3 bars) retained as genuine.
 
 ### Stage 2 — Exploratory Data Analysis
-- [ ] `02_eda.py` — Stationarity tests (ADF), cross-correlations, cointegration, volatility regimes
+- [x] `03_eda.py` — Stationarity tests (ADF), cross-correlations, Granger causality, volatility regimes
+  - 13-step pipeline: summary stats, rolling vol, correlations, lead-lag CCF, conditional returns, Granger, ACF/price diagnostics
+  - Outputs to `report/figures/` (7 plots) and `report/tables/` (5 CSV tables)
+  - Requires scipy + statsmodels in the active virtual environment
 
 ### Stage 3 — Breakout Strategy
 - [ ] `03_breakout_strategy.py`
@@ -97,13 +100,13 @@ Two cryptocurrency trading strategies backtested on Binance 15-min OHLCV data.
 
 ## Current Progress
 
-**Overall: ~10%**
+**Overall: ~30%**
 
 | Stage | Status | Notes |
 |-------|--------|-------|
 | 1 — Data download | Done | `01_data_download.py` working |
-| 1 — Data cleaning | In progress | `02_data_clean.py` has timestamp bug |
-| 2 — EDA | Not started | |
+| 1 — Data cleaning | Done | `02_data_clean.py` complete; 17,375 rows, Sep 2025–Feb 2026 |
+| 2 — EDA | Done | `03_eda.py` written; run after activating venv with scipy/statsmodels |
 | 3 — Breakout | Not started | |
 | 4 — Lead-Lag | Not started | |
 | 5 — Costs | Not started | |
@@ -115,20 +118,16 @@ Two cryptocurrency trading strategies backtested on Binance 15-min OHLCV data.
 
 ## Next Actions
 
-1. **Fix `02_data_clean.py`** — debug the timestamp issue:
-   - Add `print(df["open_time"].dtype, df["open_time"].head())` right after `pd.read_csv`
-     to confirm the values are int64 and sensible (~1.756e12 range)
-   - Add `print(df["datetime"].head())` after `pd.to_datetime` to confirm year ~2025
-   - If the datetime column looks correct but the date filter still removes everything,
-     try removing `dtype={"open_time": np.int64}` from `pd.read_csv` and letting pandas
-     infer the type
+1. **Activate venv, install scipy + statsmodels, then run `03_eda.py`**
+   - Inspect the cross-correlation and Granger output to confirm lead-lag evidence
+   - Review conditional returns table — if mean fwd return at lag-1 is < 1 bps, reconsider lead-lag strategy aggressiveness
 
-2. **Once cleaning works**, verify parquet output:
-   - Check row counts (~17,280 per asset)
-   - Check date range (Sep 2025 – Feb 2026)
-   - Check for NaN in close column
+2. **Write `04_breakout_strategy.py`** — Donchian channel + ATR filter + vol-scaled sizing
+   - Use ATR threshold calibrated from EDA rolling-vol output
+   - MVO allocation across BTC/ETH/DOGE; respect $100k gross cap
 
-3. **Move on to `02_eda.py`** once parquet files are confirmed correct
+3. **Write `05_leadlag_strategy.py`** — BTC signal → ETH/DOGE trade
+   - Use Granger + CCF results from EDA to set lag and z-score threshold
 
 ---
 

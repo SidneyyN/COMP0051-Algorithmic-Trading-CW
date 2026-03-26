@@ -1,85 +1,135 @@
 """
 COMP0051 Algorithmic Trading Coursework — Data Cleaning
 ========================================================
-Reads raw CSVs saved by 01_data_download.py, cleans the OHLCV data,
-computes excess returns, saves cleaned parquet files, and plots returns.
+Pipeline: Raw CSV → validate → align → returns → excess returns → final dataset
 
-Run from the project root (after 01_data_download.py):
+Steps:
+  1.  Load raw data
+  2.  Standardise structure
+  3.  Remove duplicates
+  4.  Check for missing timestamps (forward-fill small gaps)
+  5.  Align assets (intersection of timestamps)
+  6.  Basic sanity checks
+  7.  Compute simple returns
+  8.  Identify outliers (flag only — do NOT remove)
+  9.  Load risk-free rate
+  10. Align risk-free rate to 15-min frequency
+  11. Compute excess returns
+  12. Construct final wide dataset
+  13. Final validation
+  14. Save to parquet
+
+Run from the project root:
     python notebooks/02_data_clean.py
 """
 
 import os
-import io
-import requests
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 
 # ============================================================
 # Configuration
 # ============================================================
 
-ASSETS = ["BTCUSDT", "ETHUSDT", "DOGEUSDT"]
+ASSETS   = ["BTCUSDT", "ETHUSDT", "DOGEUSDT"]
 INTERVAL = "15m"
-MONTHS = [
-    "2025-09", "2025-10", "2025-11", "2025-12",
-    "2026-01", "2026-02",
-]
 
-RAW_DIR    = os.path.join("data", "raw")
+BARS_PER_YEAR = 35_064   # 365.25 × 24 × 4
+FFILL_LIMIT   = 4        # forward-fill up to 4 consecutive bars (1 hour)
+
+OUTLIER_ROLL_WINDOW = 100   # rolling window (bars) for z-score computation
+OUTLIER_Z_THRESHOLD = 7     # flag |z| > 7
+
+RAW_DIR     = os.path.join("data", "raw")
 CLEANED_DIR = os.path.join("data", "cleaned")
-RF_DIR     = os.path.join("data", "risk_free")
+RF_DIR      = os.path.join("data", "risk_free")
 FIGURES_DIR = os.path.join("report", "figures")
 
 for d in [CLEANED_DIR, FIGURES_DIR]:
     os.makedirs(d, exist_ok=True)
 
-# Expected date bounds derived from MONTHS
-DATE_MIN = pd.Timestamp(MONTHS[0]  + "-01", tz="UTC")
-DATE_MAX = (pd.Timestamp(MONTHS[-1] + "-01", tz="UTC")
-            + pd.offsets.MonthEnd(1)
-            + pd.Timedelta(days=1))
+SHORT = {"BTCUSDT": "BTC", "ETHUSDT": "ETH", "DOGEUSDT": "DOGE"}
 
 # ============================================================
-# 1. Clean raw kline data
+# Step 1 — Load Raw Data
 # ============================================================
 
-def clean_kline_data(asset: str) -> pd.DataFrame:
+def load_raw(asset: str) -> pd.DataFrame:
     """
-    Load the raw CSV for one asset, clean it, and return a DataFrame
-    indexed by UTC datetime with columns: open, high, low, close, volume.
+    Load raw CSV, keep OHLCV columns, parse timestamps.
+    Auto-detects whether open_time is in microseconds or milliseconds.
     """
-    raw_path = os.path.join(RAW_DIR, f"{asset}_{INTERVAL}_raw.csv")
-    if not os.path.exists(raw_path):
-        raise FileNotFoundError(f"Raw file not found: {raw_path}. Run 01_data_download.py first.")
+    path = os.path.join(RAW_DIR, f"{asset}_{INTERVAL}_raw.csv")
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"Raw file not found: {path}. Run 01_data_download.py first."
+        )
 
-    # Read CSV — open_time is saved as int64 by the download script
-    df = pd.read_csv(raw_path, dtype={"open_time": np.int64})
+    df = pd.read_csv(path)
 
-    # --- Build datetime index from open_time (ms since epoch) ---
-    df["datetime"] = pd.to_datetime(df["open_time"], unit="ms", utc=True)
+    # Keep only relevant columns
+    df = df[["open_time", "open", "high", "low", "close", "volume"]].copy()
 
-    # Keep only rows inside the expected date range (drops any corrupt timestamps)
-    df = df[(df["datetime"] >= DATE_MIN) & (df["datetime"] <= DATE_MAX)].copy()
-    df = df.sort_values("datetime").reset_index(drop=True)
-
-    print(f"  [{asset}] Loaded {len(df)} rows after date filter "
-          f"({df['datetime'].iloc[0].date()} – {df['datetime'].iloc[-1].date()})")
-
-    # --- Remove duplicates ---
-    n_before = len(df)
-    df = df.drop_duplicates(subset=["datetime"], keep="first").reset_index(drop=True)
-    if len(df) < n_before:
-        print(f"  [{asset}] Removed {n_before - len(df)} duplicate rows")
-
-    # --- Set datetime as index ---
-    df = df.set_index("datetime")
-    price_cols = ["open", "high", "low", "close"]
-    for col in price_cols + ["volume"]:
+    # Convert OHLCV to float
+    for col in ["open", "high", "low", "close", "volume"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # --- Reindex to complete 15-min grid and forward-fill small gaps ---
+    # Detect timestamp unit: >1e14 = microseconds; otherwise milliseconds
+    max_ts = df["open_time"].max()
+    if max_ts > 1e14:
+        print(f"  [{asset}] Timestamps in microseconds → converting to milliseconds")
+        df["open_time"] = df["open_time"] // 1000
+    else:
+        print(f"  [{asset}] Timestamps confirmed in milliseconds")
+
+    df["timestamp"] = pd.to_datetime(df["open_time"], unit="ms", utc=True)
+    df = df.drop(columns=["open_time"])
+
+    print(f"  [{asset}] Loaded {len(df)} rows")
+    return df
+
+
+# ============================================================
+# Step 2 — Standardise Structure
+# ============================================================
+
+def standardise(df: pd.DataFrame, asset: str) -> pd.DataFrame:
+    """Set timestamp as index, sort chronologically."""
+    df = df.set_index("timestamp")
+    df.index.name = "timestamp"
+    df = df.sort_index()
+    print(f"  [{asset}] Date range: {df.index.min()} → {df.index.max()}")
+    return df
+
+
+# ============================================================
+# Step 3 — Remove Duplicates
+# ============================================================
+
+def remove_duplicates(df: pd.DataFrame, asset: str) -> pd.DataFrame:
+    n_before = len(df)
+    df = df[~df.index.duplicated(keep="first")]
+    removed = n_before - len(df)
+    if removed:
+        print(f"  [{asset}] Removed {removed} duplicate timestamps")
+    else:
+        print(f"  [{asset}] No duplicates found")
+    return df
+
+
+# ============================================================
+# Step 4 — Check for Missing Timestamps
+# ============================================================
+
+def handle_missing_bars(df: pd.DataFrame, asset: str) -> pd.DataFrame:
+    """
+    Reindex to complete 15-min grid.
+    Small gaps (≤ FFILL_LIMIT bars): forward-fill prices, zero volume.
+    Large gaps (> FFILL_LIMIT bars): drop affected rows.
+    """
+    price_cols = ["open", "high", "low", "close"]
+
     full_index = pd.date_range(
         start=df.index.min(),
         end=df.index.max(),
@@ -87,125 +137,269 @@ def clean_kline_data(asset: str) -> pd.DataFrame:
         tz="UTC",
     )
     n_missing = len(full_index) - len(df)
-    if n_missing > 0:
-        print(f"  [{asset}] {n_missing} missing bars — forward-filling (limit=4)")
-    df = df.reindex(full_index)
-    df.index.name = "datetime"
 
-    df[price_cols] = df[price_cols].ffill(limit=4)
+    if n_missing == 0:
+        print(f"  [{asset}] No missing bars")
+        return df
+
+    print(f"  [{asset}] {n_missing} missing bars detected")
+
+    df = df.reindex(full_index)
+    df.index.name = "timestamp"
+
+    df[price_cols] = df[price_cols].ffill(limit=FFILL_LIMIT)
     df["volume"] = df["volume"].fillna(0)
 
-    n_still_nan = df[price_cols].isna().any(axis=1).sum()
-    if n_still_nan > 0:
-        print(f"  [{asset}] Dropping {n_still_nan} rows with gaps > 1 hour")
+    n_large_gap = df[price_cols].isna().any(axis=1).sum()
+    if n_large_gap:
+        print(f"  [{asset}] Dropping {n_large_gap} rows in gaps > {FFILL_LIMIT} bars")
         df = df.dropna(subset=price_cols)
 
-    # --- Detect and repair price outliers (rolling MAD) ---
-    rolling_median = df["close"].rolling(window=96, center=True, min_periods=20).median()
-    rolling_mad = df["close"].rolling(window=96, center=True, min_periods=20).apply(
-        lambda x: np.median(np.abs(x - np.median(x))), raw=True
-    )
-    deviation = np.abs(df["close"] - rolling_median) / (rolling_mad + 1e-10)
-    outlier_mask = deviation > 5
-    if outlier_mask.sum() > 0:
-        print(f"  [{asset}] Repairing {outlier_mask.sum()} price outliers")
-        for col in price_cols:
-            col_median = df[col].rolling(window=96, center=True, min_periods=20).median()
-            df.loc[outlier_mask, col] = col_median[outlier_mask]
-
-    # --- Enforce OHLC consistency ---
-    df["high"] = df[["open", "high", "close"]].max(axis=1)
-    df["low"]  = df[["open", "low",  "close"]].min(axis=1)
-
-    df = df[["open", "high", "low", "close", "volume"]].astype(float)
-
-    print(f"  [{asset}] Final: {len(df)} rows, "
-          f"{df.index.min().date()} to {df.index.max().date()}")
     return df
 
 
 # ============================================================
-# 2. Compute excess returns
+# Step 5 — Align Assets
+# ============================================================
+
+def align_assets(asset_dfs: dict) -> dict:
+    """Keep only timestamps present across all three assets."""
+    common_index = asset_dfs[ASSETS[0]].index
+    for asset in ASSETS[1:]:
+        common_index = common_index.intersection(asset_dfs[asset].index)
+
+    n_common = len(common_index)
+    print(f"\n  Common timestamps across all assets: {n_common}")
+    for asset in ASSETS:
+        dropped = len(asset_dfs[asset]) - n_common
+        if dropped:
+            print(f"  [{asset}] Dropped {dropped} rows not in common index")
+
+    return {asset: df.loc[common_index] for asset, df in asset_dfs.items()}
+
+
+# ============================================================
+# Step 6 — Basic Sanity Checks
+# ============================================================
+
+def sanity_checks(df: pd.DataFrame, asset: str) -> None:
+    """Check for negative or zero prices; report zero-volume bars."""
+    issues = False
+    for col in ["open", "high", "low", "close"]:
+        n_neg  = (df[col] <  0).sum()
+        n_zero = (df[col] == 0).sum()
+        if n_neg or n_zero:
+            print(f"  [{asset}] WARNING: '{col}' has {n_neg} negative and {n_zero} zero values")
+            issues = True
+    n_zero_vol = (df["volume"] == 0).sum()
+    if n_zero_vol:
+        print(f"  [{asset}] Note: {n_zero_vol} bars with zero volume")
+    if not issues:
+        print(f"  [{asset}] Sanity checks passed — "
+              f"close range {df['close'].min():.4f} – {df['close'].max():.4f}")
+
+
+# ============================================================
+# Step 7 — Compute Simple Returns
+# ============================================================
+
+def compute_simple_returns(df: pd.DataFrame) -> pd.Series:
+    """r_t = (p_t − p_{t−1}) / p_{t−1}  (first row dropped)."""
+    return df["close"].pct_change().iloc[1:]
+
+
+# ============================================================
+# Step 8 — Identify Outliers (flag only, do NOT remove)
+# ============================================================
+
+def flag_outliers(returns: pd.Series, asset: str) -> pd.Series:
+    """
+    Rolling z-score: z_t = r_t / σ_t  (σ from rolling std, window=OUTLIER_ROLL_WINDOW).
+    Flags |z| > OUTLIER_Z_THRESHOLD.
+    Returns a boolean mask — does NOT modify returns.
+    """
+    rolling_std = returns.rolling(window=OUTLIER_ROLL_WINDOW, min_periods=20).std()
+    z_scores    = returns / (rolling_std + 1e-15)
+    mask        = z_scores.abs() > OUTLIER_Z_THRESHOLD
+    n_flagged   = mask.sum()
+
+    if n_flagged:
+        print(f"  [{asset}] {n_flagged} flagged outlier(s) (|z| > {OUTLIER_Z_THRESHOLD}):")
+        for dt in returns[mask].index:
+            print(f"    {dt}  return={returns[dt]:+.6f}  z={z_scores[dt]:+.1f}")
+    else:
+        print(f"  [{asset}] No outliers flagged")
+
+    return mask
+
+
+# ============================================================
+# Step 9 — Load Risk-Free Rate
 # ============================================================
 
 def load_risk_free_rate() -> pd.Series:
-    """Load the saved EFFR series (annual decimal) indexed by date."""
-    rf_path = os.path.join(RF_DIR, "effr_daily.csv")
-    if not os.path.exists(rf_path):
-        raise FileNotFoundError(f"Risk-free file not found: {rf_path}. Run 01_data_download.py first.")
-    rf = pd.read_csv(rf_path, index_col=0, parse_dates=True)
-    return rf.iloc[:, 0].ffill().dropna()
+    """Load daily EFFR (annual decimal) indexed by date."""
+    path = os.path.join(RF_DIR, "effr_daily.csv")
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"Risk-free file not found: {path}. Run 01_data_download.py first."
+        )
+    rf = pd.read_csv(path, index_col=0, parse_dates=True)
+    rf_series = rf.iloc[:, 0].ffill().dropna()
+    print(f"  Loaded {len(rf_series)} daily RF observations "
+          f"({rf_series.index.min().date()} – {rf_series.index.max().date()})")
+    return rf_series
 
 
-def compute_excess_returns(price_df: pd.DataFrame, rf_daily: pd.Series,
-                           bars_per_day: int = 96):
+# ============================================================
+# Step 10 — Align Risk-Free Rate to 15-Min Frequency
+# ============================================================
+
+def align_rf_to_bars(rf_daily: pd.Series, bar_index: pd.DatetimeIndex) -> pd.Series:
     """
-    Returns (excess_returns, simple_returns, rf_per_bar) as pd.Series,
-    all with the same DatetimeIndex (first row dropped due to pct_change).
+    Forward-fill daily EFFR to 15-min bars, then convert annual → per-bar:
+        r_f(15min) = r_f(annual) / (365.25 × 24 × 4)
     """
-    simple_returns = price_df["close"].pct_change()
-
-    bar_dates = price_df.index.normalize().tz_localize(None)
+    bar_dates = bar_index.normalize().tz_localize(None)
     rf_mapped = bar_dates.map(lambda d: rf_daily.get(d, np.nan))
-    rf_per_bar = pd.Series(rf_mapped.values, index=price_df.index) / (bars_per_day * 365.25)
+    rf_per_bar = pd.Series(rf_mapped.values, index=bar_index) / BARS_PER_YEAR
     rf_per_bar = rf_per_bar.ffill()
-
-    excess_returns = simple_returns - rf_per_bar.shift(1)
-    return excess_returns.iloc[1:], simple_returns.iloc[1:], rf_per_bar.iloc[1:]
+    return rf_per_bar
 
 
 # ============================================================
-# 3. Plotting
+# Step 11 — Compute Excess Returns
 # ============================================================
 
-def plot_return_series(returns_dict: dict, title_suffix: str = "Excess Returns"):
-    n = len(returns_dict)
-    fig, axes = plt.subplots(n, 1, figsize=(14, 4 * n), sharex=True)
-    if n == 1:
-        axes = [axes]
-    colours = {"BTCUSDT": "#F7931A", "ETHUSDT": "#627EEA", "DOGEUSDT": "#C2A633"}
+def compute_excess_returns(simple_ret: pd.Series, rf_per_bar: pd.Series) -> pd.Series:
+    """r_t^e = r_t − r_f(t−1)  (risk-free rate is lagged by one bar)."""
+    rf_aligned = rf_per_bar.reindex(simple_ret.index).ffill()
+    return simple_ret - rf_aligned.shift(1)
 
-    for ax, (asset, rets) in zip(axes, returns_dict.items()):
-        ax.plot(rets.index, rets.values, linewidth=0.3, alpha=0.8,
-                color=colours.get(asset, "steelblue"))
+
+# ============================================================
+# Step 12 — Construct Final Wide Dataset
+# ============================================================
+
+def build_final_dataset(
+    asset_dfs:     dict,
+    simple_ret:    dict,
+    excess_ret:    dict,
+    rf_per_bar:    pd.Series,
+) -> pd.DataFrame:
+    """
+    Merge all assets into one wide DataFrame indexed by timestamp.
+
+    Columns:
+        BTC_open, BTC_high, BTC_low, BTC_close, BTC_volume,
+        ETH_open, ..., DOGE_open, ...,
+        BTC_ret, ETH_ret, DOGE_ret,
+        BTC_excess, ETH_excess, DOGE_excess,
+        rf_per_bar
+    """
+    # Return series start one row after price series; use returns index as base
+    base_index = simple_ret[ASSETS[0]].index
+
+    frames = {}
+    for asset in ASSETS:
+        tag = SHORT[asset]
+        for col in ["open", "high", "low", "close", "volume"]:
+            frames[f"{tag}_{col}"] = asset_dfs[asset][col].reindex(base_index)
+
+    df = pd.DataFrame(frames, index=base_index)
+
+    for asset in ASSETS:
+        tag = SHORT[asset]
+        df[f"{tag}_ret"]    = simple_ret[asset].reindex(base_index)
+        df[f"{tag}_excess"] = excess_ret[asset].reindex(base_index)
+
+    df["rf_per_bar"] = rf_per_bar.reindex(base_index)
+
+    return df
+
+
+# ============================================================
+# Step 13 — Final Validation
+# ============================================================
+
+def final_validation(df: pd.DataFrame) -> None:
+    print(f"  Shape      : {df.shape}")
+    print(f"  Date range : {df.index.min()} → {df.index.max()}")
+
+    missing = df.isna().sum()
+    missing = missing[missing > 0]
+    if missing.empty:
+        print("  Missing values: none")
+    else:
+        print(f"  Missing values:\n{missing}")
+
+    for asset in ASSETS:
+        tag = SHORT[asset]
+        ret = df[f"{tag}_ret"].dropna()
+        print(f"  [{tag}] return — mean={ret.mean():.6f} | std={ret.std():.6f} "
+              f"| min={ret.min():.4f} | max={ret.max():.4f}")
+
+
+# ============================================================
+# Plots
+# ============================================================
+
+def plot_returns(df: pd.DataFrame) -> None:
+    tags    = ["BTC", "ETH", "DOGE"]
+    colours = {"BTC": "#F7931A", "ETH": "#627EEA", "DOGE": "#C2A633"}
+
+    # Return time series
+    fig, axes = plt.subplots(3, 1, figsize=(14, 10), sharex=True)
+    for ax, tag in zip(axes, tags):
+        ret = df[f"{tag}_ret"].dropna()
+        ax.plot(ret.index, ret.values, linewidth=0.3, alpha=0.8, color=colours[tag])
         ax.set_ylabel("Return")
-        ax.set_title(f"{asset} — {title_suffix}")
+        ax.set_title(f"{tag}/USDT — Simple Returns (15-min)")
         ax.axhline(0, color="grey", linewidth=0.5, linestyle="--")
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
         ax.grid(True, alpha=0.3)
-        stats = (f"Mean: {rets.mean():.6f}  |  Std: {rets.std():.4f}  |  "
-                 f"Skew: {rets.skew():.2f}  |  Kurt: {rets.kurtosis():.2f}")
-        ax.text(0.01, 0.95, stats, transform=ax.transAxes, fontsize=8,
-                verticalalignment="top", bbox=dict(boxstyle="round", alpha=0.1))
-
     plt.tight_layout()
     fig.autofmt_xdate()
-    save_path = os.path.join(FIGURES_DIR, "return_time_series.png")
-    fig.savefig(save_path, dpi=150, bbox_inches="tight")
-    print(f"Plot saved: {save_path}")
-    plt.show()
+    path = os.path.join(FIGURES_DIR, "return_time_series.png")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    print(f"  Saved: {path}")
+    plt.close(fig)
 
-
-def plot_cumulative_returns(returns_dict: dict):
+    # Cumulative returns
     fig, ax = plt.subplots(figsize=(14, 6))
-    colours = {"BTCUSDT": "#F7931A", "ETHUSDT": "#627EEA", "DOGEUSDT": "#C2A633"}
-
-    for asset, rets in returns_dict.items():
-        cum = (1 + rets).cumprod() - 1
-        ax.plot(cum.index, cum.values * 100, label=asset,
-                color=colours.get(asset, "steelblue"), linewidth=1)
-
+    for tag in tags:
+        ret = df[f"{tag}_ret"].dropna()
+        cum = (1 + ret).cumprod() - 1
+        ax.plot(cum.index, cum.values * 100, label=f"{tag}/USDT",
+                color=colours[tag], linewidth=1)
     ax.set_ylabel("Cumulative Return (%)")
     ax.set_title("Cumulative Returns — All Assets (15-min)")
     ax.legend()
     ax.grid(True, alpha=0.3)
     ax.axhline(0, color="grey", linewidth=0.5, linestyle="--")
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
     fig.autofmt_xdate()
-    save_path = os.path.join(FIGURES_DIR, "cumulative_returns.png")
-    fig.savefig(save_path, dpi=150, bbox_inches="tight")
-    print(f"Plot saved: {save_path}")
-    plt.show()
+    path = os.path.join(FIGURES_DIR, "cumulative_returns.png")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    print(f"  Saved: {path}")
+    plt.close(fig)
+
+    # Return histograms
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    for ax, tag in zip(axes, tags):
+        ret = df[f"{tag}_ret"].dropna()
+        ax.hist(ret, bins=200, color=colours[tag], alpha=0.7, edgecolor="none")
+        stats = (f"mean={ret.mean():.5f}\nstd={ret.std():.4f}\n"
+                 f"skew={ret.skew():.2f}  kurt={ret.kurtosis():.2f}")
+        ax.text(0.97, 0.97, stats, transform=ax.transAxes, fontsize=8,
+                ha="right", va="top", bbox=dict(boxstyle="round", alpha=0.1))
+        ax.set_title(f"{tag}/USDT Return Distribution")
+        ax.set_xlabel("Return")
+        ax.set_ylabel("Frequency")
+        ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    path = os.path.join(FIGURES_DIR, "return_histograms.png")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    print(f"  Saved: {path}")
+    plt.close(fig)
 
 
 # ============================================================
@@ -214,63 +408,91 @@ def plot_cumulative_returns(returns_dict: dict):
 
 def main():
     print("=" * 60)
-    print("COMP0051 — Data Cleaning")
+    print("COMP0051 — Data Cleaning Pipeline")
     print("=" * 60)
 
-    # --- Step 1: Clean ---
-    print(f"\n{'='*60}")
-    print("Cleaning OHLCV data")
-    print(f"{'='*60}")
-
-    cleaned_data = {}
+    # Steps 1–3: load, standardise, deduplicate
+    print("\n[Steps 1–3] Load, standardise, remove duplicates")
+    asset_dfs = {}
     for asset in ASSETS:
-        print(f"\nCleaning {asset}:")
-        cleaned_data[asset] = clean_kline_data(asset)
+        print(f"\n  {asset}:")
+        df = load_raw(asset)
+        df = standardise(df, asset)
+        df = remove_duplicates(df, asset)
+        asset_dfs[asset] = df
 
-    # --- Step 2: Risk-free rate ---
+    # Step 4: missing bars
+    print("\n[Step 4] Check for missing timestamps")
+    for asset in ASSETS:
+        asset_dfs[asset] = handle_missing_bars(asset_dfs[asset], asset)
+
+    # Step 5: align assets
+    print("\n[Step 5] Align assets to common timestamps")
+    asset_dfs = align_assets(asset_dfs)
+
+    # Step 6: sanity checks
+    print("\n[Step 6] Basic sanity checks")
+    for asset in ASSETS:
+        sanity_checks(asset_dfs[asset], asset)
+
+    # Step 7: simple returns
+    print("\n[Step 7] Compute simple returns")
+    simple_returns = {}
+    for asset in ASSETS:
+        simple_returns[asset] = compute_simple_returns(asset_dfs[asset])
+        print(f"  [{asset}] {len(simple_returns[asset])} return observations")
+
+    # Step 8: flag outliers (do NOT remove)
+    print("\n[Step 8] Identify outliers (flag only — retaining all observations)")
+    outlier_flags = {}
+    for asset in ASSETS:
+        outlier_flags[asset] = flag_outliers(simple_returns[asset], asset)
+
+    # Step 9: risk-free rate
+    print("\n[Step 9] Load risk-free rate")
     rf_daily = load_risk_free_rate()
-    print(f"\nLoaded risk-free rate: {len(rf_daily)} daily observations")
 
-    # --- Step 3: Compute returns and save parquet ---
-    print(f"\n{'='*60}")
-    print("Computing excess returns & saving to parquet")
-    print(f"{'='*60}")
+    # Step 10: align RF to 15-min bars
+    print("\n[Step 10] Align risk-free rate to 15-min frequency")
+    bar_index  = simple_returns[ASSETS[0]].index
+    rf_per_bar = align_rf_to_bars(rf_daily, bar_index)
+    mean_rf    = rf_per_bar.mean()
+    print(f"  RF per bar (mean): {mean_rf:.3e}  "
+          f"(≈ {mean_rf * BARS_PER_YEAR:.4f} annualised)")
 
-    excess_returns_dict = {}
-    simple_returns_dict = {}
+    # Step 11: excess returns
+    print("\n[Step 11] Compute excess returns")
+    excess_returns = {}
+    for asset in ASSETS:
+        excess_returns[asset] = compute_excess_returns(
+            simple_returns[asset], rf_per_bar
+        )
+        print(f"  [{asset}] excess return mean: {excess_returns[asset].mean():.8f}")
 
-    for asset, cdf in cleaned_data.items():
-        excess_ret, simple_ret, rf_bars = compute_excess_returns(cdf, rf_daily)
-        excess_returns_dict[asset] = excess_ret
-        simple_returns_dict[asset] = simple_ret
+    # Step 12: build wide dataset
+    print("\n[Step 12] Construct final wide dataset")
+    final_df = build_final_dataset(
+        asset_dfs, simple_returns, excess_returns, rf_per_bar
+    )
+    print(f"  Columns: {list(final_df.columns)}")
 
-        out = cdf.copy()
-        out["simple_return"] = cdf["close"].pct_change()
-        out["excess_return"] = np.nan
-        out.loc[excess_ret.index, "excess_return"] = excess_ret.values
-        out["rf_per_bar"] = np.nan
-        out.loc[rf_bars.index, "rf_per_bar"] = rf_bars.values
+    # Step 13: validate
+    print("\n[Step 13] Final validation")
+    final_validation(final_df)
 
-        parquet_path = os.path.join(CLEANED_DIR, f"{asset}_{INTERVAL}_cleaned.parquet")
-        out.to_parquet(parquet_path)
-        print(f"  Saved: {parquet_path} ({len(out)} rows)")
+    # Step 14: save
+    print("\n[Step 14] Save cleaned data")
+    out_path = os.path.join(CLEANED_DIR, "cleaned_data.parquet")
+    final_df.to_parquet(out_path)
+    print(f"  Saved: {out_path}  ({len(final_df)} rows × {len(final_df.columns)} columns)")
 
-        mean_rf = rf_bars.mean()
-        mean_std = simple_ret.std()
-        print(f"  [{asset}] rf/bar: {mean_rf:.8f} | return std/bar: {mean_std:.6f} "
-              f"| ratio: {mean_std / (mean_rf + 1e-15):.0f}x")
+    # Plots
+    print("\n[Plots] Generating visualisations")
+    plot_returns(final_df)
 
-    # --- Step 4: Plot ---
-    print(f"\n{'='*60}")
-    print("Generating plots")
-    print(f"{'='*60}")
-
-    plot_return_series(excess_returns_dict, title_suffix="15-min Excess Returns")
-    plot_cumulative_returns(simple_returns_dict)
-
-    print("\nCleaning complete.")
-    print(f"  Parquet files : {CLEANED_DIR}/")
-    print(f"  Figures       : {FIGURES_DIR}/")
+    print("\nData cleaning complete.")
+    print(f"  Parquet : {out_path}")
+    print(f"  Figures : {FIGURES_DIR}/")
 
 
 if __name__ == "__main__":
