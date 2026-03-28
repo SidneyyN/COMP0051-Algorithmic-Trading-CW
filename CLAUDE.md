@@ -29,7 +29,7 @@ Two cryptocurrency trading strategies backtested on Binance 15-min OHLCV data.
 |---------|-------|--------|
 | 1 | Data pipeline (download, clean, returns) | 10 |
 | 2a | Breakout / Trend-Following strategy | 20 |
-| 2b | Lead-Lag / Causal strategy | 20 |
+| 2b | Pairs Trading strategy (replaces Lead-Lag) | 20 |
 | 3 | Transaction costs (Roll model, Corwin-Schultz) | 10 |
 | 4 | Performance evaluation (Sharpe, Sortino, Calmar, PnL) | 10 |
 | 5 | Discussion / Next steps | 10 |
@@ -53,6 +53,14 @@ Two cryptocurrency trading strategies backtested on Binance 15-min OHLCV data.
   - 13-step pipeline: summary stats, rolling vol, correlations, lead-lag CCF, conditional returns, Granger, ACF/price diagnostics
   - Outputs to `report/figures/` (7 plots) and `report/tables/` (5 CSV tables)
   - Requires scipy + statsmodels in the active virtual environment
+  - EDA results showed lead-lag predictive structure is too weak to trade; strategy replaced with pairs trading
+- [x] `03_eda.py` extension — Pairs trading diagnostics (see `EDA_EXTENSION.md`)
+  - Steps 14–17 appended to `03_eda.py` (runs after core EDA steps 1–13)
+  - Step 14: log prices + ADF unit root tests on prices (expect non-stationary)
+  - Step 15: Engle-Granger cointegration test on BTC–ETH, BTC–DOGE, ETH–DOGE
+  - Step 16: OLS hedge ratio (in-sample), spread construction, ADF on spread, OU half-life; pair selection recommendation
+  - Step 17: Z-score distribution plots (signal frequency at ±1σ, ±2σ)
+  - Outputs: `pairs_log_price_adf.csv`, `pairs_cointegration.csv`, `pairs_summary.csv`, `pairs_spreads.png`, `pairs_zscore_distributions.png`
 
 ### Stage 3 — Breakout Strategy
 - [ ] `03_breakout_strategy.py`
@@ -63,13 +71,14 @@ Two cryptocurrency trading strategies backtested on Binance 15-min OHLCV data.
   - MVO allocation across BTC/ETH/DOGE
   - Respect $100k gross exposure cap
 
-### Stage 4 — Lead-Lag Strategy
-- [ ] `04_leadlag_strategy.py`
-  - Rolling cross-correlation (BTC vs ETH/DOGE, lags 1–4 bars)
-  - Granger causality test over rolling windows
-  - Signal: BTC return > 1 z-score → trade lagging asset in same direction
-  - Exit after expected lag period (2–3 bars) or catch-up
-  - Signal-proportional position sizing
+### Stage 4 — Pairs Trading Strategy (replaces Lead-Lag)
+- [ ] `04_pairs_strategy.py`
+  - Decision: lead-lag effect too weak to survive costs; replaced with pairs trading
+  - Asset pair(s) selected based on EDA extension cointegration results
+  - Spread = log(P_A) − β·log(P_B), β estimated via OLS in-sample
+  - Signal: enter when spread z-score > threshold, exit at mean-reversion
+  - Rolling z-score with Ornstein-Uhlenbeck half-life for window sizing
+  - Dollar-neutral positioning; gross exposure capped at $100k
 
 ### Stage 5 — Transaction Costs
 - [ ] `05_transaction_costs.py`
@@ -100,15 +109,16 @@ Two cryptocurrency trading strategies backtested on Binance 15-min OHLCV data.
 
 ## Current Progress
 
-**Overall: ~30%**
+**Overall: ~40%**
 
 | Stage | Status | Notes |
 |-------|--------|-------|
 | 1 — Data download | Done | `01_data_download.py` working |
 | 1 — Data cleaning | Done | `02_data_clean.py` complete; 17,375 rows, Sep 2025–Feb 2026 |
-| 2 — EDA | Done | `03_eda.py` written; run after activating venv with scipy/statsmodels |
+| 2 — EDA (core) | Done | `03_eda.py` complete; lead-lag evidence too weak → pivot to pairs trading |
+| 2 — EDA (extension) | Done | Steps 14–17 appended to `03_eda.py`; cointegration, spread, half-life, z-score |
 | 3 — Breakout | Not started | |
-| 4 — Lead-Lag | Not started | |
+| 4 — Pairs Trading | Not started | Replaces lead-lag strategy |
 | 5 — Costs | Not started | |
 | 6 — Performance | Not started | |
 | 7 — Visualisations | Not started | |
@@ -118,23 +128,25 @@ Two cryptocurrency trading strategies backtested on Binance 15-min OHLCV data.
 
 ## Next Actions
 
-1. **Activate venv, install scipy + statsmodels, then run `03_eda.py`**
-   - Inspect the cross-correlation and Granger output to confirm lead-lag evidence
-   - Review conditional returns table — if mean fwd return at lag-1 is < 1 bps, reconsider lead-lag strategy aggressiveness
+1. **Read `PAIRS_STRATEGY_PLAN.md`** — understand the full design spec before implementing
+   - EDA extension outputs (β, half-life, pair selection) are now available in `report/tables/pairs_summary.csv`
 
-2. **Write `04_breakout_strategy.py`** — Donchian channel + ATR filter + vol-scaled sizing
-   - Use ATR threshold calibrated from EDA rolling-vol output
+2. **Write `05_pairs_strategy.py`** — implement pairs trading strategy per plan
+   - Parameters (β, entry ±2σ, exit ±0.5σ, lookback ≈ 2×half-life) from `pairs_summary.csv`
+   - Dollar-neutral positioning; gross exposure capped at $100k
+
+3. **Write `04_breakout_strategy.py`** — implement after pairs strategy is done
+   - Donchian channel + ATR filter + vol-scaled sizing
    - MVO allocation across BTC/ETH/DOGE; respect $100k gross cap
-
-3. **Write `05_leadlag_strategy.py`** — BTC signal → ETH/DOGE trade
-   - Use Granger + CCF results from EDA to set lag and z-score threshold
 
 ---
 
 ## Key Design Decisions (for report)
 
-- 15-min bars chosen for lead-lag detection (1–4 bar lag ≈ 15–60 min)
+- 15-min bars chosen for intraday signal resolution
 - In/out-of-sample split: 67/33 on clean calendar boundaries
+- Lead-lag strategy abandoned: EDA showed cross-correlations and conditional returns too small to survive costs
+- Replaced with pairs trading: cointegration-based mean reversion is less sensitive to short-horizon noise
 - Risk-free rate negligible at 15-min frequency (~1.4×10⁻⁵% per bar vs ~0.1–1% crypto moves)
 - Roll model used for spread estimation; Corwin-Schultz as robustness check
 - Gross exposure capped at min($100k, 10 × portfolio_value) at all times
@@ -147,9 +159,9 @@ Two cryptocurrency trading strategies backtested on Binance 15-min OHLCV data.
 notebooks/
   01_data_download.py     — download klines + FRED (DONE)
   02_data_clean.py        — clean + returns + parquet (IN PROGRESS)
-  03_eda.py               — EDA
+  03_eda.py               — EDA (core done; extension pending — see EDA_EXTENSION.md)
   04_breakout_strategy.py
-  05_leadlag_strategy.py
+  05_pairs_strategy.py    — pairs trading (replaces leadlag)
   06_transaction_costs.py
   07_performance.py
   08_visualisations.py

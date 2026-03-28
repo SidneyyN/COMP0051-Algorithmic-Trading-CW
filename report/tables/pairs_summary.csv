@@ -1,0 +1,4 @@
+Pair,Beta,Alpha,R_squared,Coint_p,Spread_ADF_stat,Spread_ADF_p,Spread_stationary,Half_life_bars,Half_life_hours,Pct_above_1sd,Pct_above_2sd
+BTC–ETH,0.6780,5.9814,0.9451,0.0065,-3.9750,0.0015,True,392.3651,98.0913,30.9525,5.3755
+BTC–DOGE,0.4411,12.2884,0.8902,0.6202,-1.1765,0.6836,False,2550.1058,637.5265,28.8748,8.1669
+ETH–DOGE,0.6431,9.2895,0.9204,0.6190,-1.3587,0.6019,False,2470.1974,617.5493,23.6950,7.7410

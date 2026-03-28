@@ -38,7 +38,7 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from scipy import stats
 from statsmodels.graphics.tsaplots import plot_acf
-from statsmodels.tsa.stattools import adfuller, grangercausalitytests
+from statsmodels.tsa.stattools import adfuller, grangercausalitytests, coint
 
 warnings.filterwarnings("ignore")
 
@@ -642,6 +642,8 @@ def save_outputs_summary() -> None:
         "eda_cross_correlations.png",
         "eda_price_series.png",
         "eda_acf_returns.png",
+        "pairs_spreads.png",
+        "pairs_zscore_distributions.png",
     ]
     for f in figs:
         full = os.path.join(FIGURES_DIR, f)
@@ -654,11 +656,272 @@ def save_outputs_summary() -> None:
         "cross_correlations.csv",
         "conditional_returns.csv",
         "granger_causality.csv",
+        "pairs_log_price_adf.csv",
+        "pairs_cointegration.csv",
+        "pairs_summary.csv",
     ]
     for t in tables:
         full = os.path.join(TABLES_DIR, t)
         status = "OK" if os.path.exists(full) else "MISSING"
         print(f"  [{status}] {t}")
+
+
+# ============================================================
+# Step 14 — Pairs: Log Prices + Unit Root Tests
+# ============================================================
+
+def pairs_log_price_unit_roots(df: pd.DataFrame) -> pd.DataFrame:
+    """Prepare log prices and verify each price series is I(1)."""
+    print("\n" + "=" * 60)
+    print("Step 14 — Pairs Trading: Log Prices + Unit Root Tests")
+    print("=" * 60)
+
+    log_prices = pd.DataFrame(index=df.index)
+    for tag in TAGS:
+        log_prices[tag] = np.log(df[f"{tag}_close"])
+
+    print("\n  ADF tests on log prices (expect NON-stationary: p > 0.05):")
+    rows = []
+    for tag in TAGS:
+        lp = log_prices[tag].dropna()
+        adf_stat, adf_p, *_ = adfuller(lp, maxlag=10, autolag="AIC")
+        result = "non-stationary (OK)" if adf_p > 0.05 else "STATIONARY (unexpected)"
+        print(f"    [{tag}] ADF stat={adf_stat:.3f}  p={adf_p:.4f}  → {result}")
+        rows.append({"Asset": tag, "ADF_stat": adf_stat, "ADF_p": adf_p,
+                     "Result": result})
+
+    adf_df = pd.DataFrame(rows).set_index("Asset")
+    path = os.path.join(TABLES_DIR, "pairs_log_price_adf.csv")
+    adf_df.to_csv(path, float_format="%.4f")
+    print(f"\n  Saved: {path}")
+
+    return log_prices
+
+
+# ============================================================
+# Step 15 — Pairs: Cointegration Tests (Engle-Granger)
+# ============================================================
+
+def pairs_cointegration_tests(log_prices: pd.DataFrame) -> dict:
+    """Engle-Granger cointegration test on all three candidate pairs."""
+    print("\n" + "=" * 60)
+    print("Step 15 — Cointegration Tests (Engle-Granger)")
+    print("=" * 60)
+
+    candidate_pairs = [("BTC", "ETH"), ("BTC", "DOGE"), ("ETH", "DOGE")]
+    results = {}
+    rows = []
+
+    print(f"\n  {'Pair':<12}  {'EG stat':>10}  {'p-value':>10}  {'Verdict':>22}")
+    for a, b in candidate_pairs:
+        lp_a = log_prices[a].dropna()
+        lp_b = log_prices[b].dropna()
+        common = lp_a.index.intersection(lp_b.index)
+        eg_stat, eg_p, crit_vals = coint(lp_a[common], lp_b[common])
+        verdict = "COINTEGRATED (p<0.05)" if eg_p < 0.05 else "not cointegrated"
+        print(f"  {a}–{b:<8}  {eg_stat:>10.4f}  {eg_p:>10.4f}  {verdict:>22}")
+        results[f"{a}–{b}"] = {"stat": eg_stat, "p": eg_p,
+                                "cointegrated": eg_p < 0.05}
+        rows.append({
+            "Pair": f"{a}–{b}",
+            "EG_stat": eg_stat, "EG_p": eg_p,
+            "Critical_1pct": crit_vals[0],
+            "Critical_5pct": crit_vals[1],
+            "Critical_10pct": crit_vals[2],
+            "Cointegrated_5pct": eg_p < 0.05,
+        })
+
+    coint_df = pd.DataFrame(rows).set_index("Pair")
+    path = os.path.join(TABLES_DIR, "pairs_cointegration.csv")
+    coint_df.to_csv(path, float_format="%.4f")
+    print(f"\n  Saved: {path}")
+
+    return results
+
+
+# ============================================================
+# Step 16 — Pairs: Spread Construction, Stationarity & Half-Life
+# ============================================================
+
+def pairs_spread_analysis(log_prices: pd.DataFrame,
+                          coint_results: dict) -> None:
+    """OLS hedge ratio, spread construction, ADF on spread, OU half-life."""
+    print("\n" + "=" * 60)
+    print("Step 16 — Spread Construction, Stationarity & Half-Life")
+    print("=" * 60)
+
+    candidate_pairs = [("BTC", "ETH"), ("BTC", "DOGE"), ("ETH", "DOGE")]
+    cutoff = pd.Timestamp("2026-01-01", tz="UTC")
+    summary_rows = []
+
+    fig, axes = plt.subplots(len(candidate_pairs), 1, figsize=(14, 12), sharex=False)
+
+    for idx, (a, b) in enumerate(candidate_pairs):
+        lp_a = log_prices[a].dropna()
+        lp_b = log_prices[b].dropna()
+        common = lp_a.index.intersection(lp_b.index)
+        lp_a, lp_b = lp_a[common], lp_b[common]
+
+        # In-sample OLS: log(P_a) = alpha + beta * log(P_b) + eps
+        is_mask = common < cutoff
+        slope, intercept, r_val, _, _ = stats.linregress(
+            lp_b[is_mask].values, lp_a[is_mask].values)
+        beta, alpha = slope, intercept
+
+        # Spread over full sample
+        spread = lp_a - beta * lp_b - alpha
+
+        # ADF on spread
+        adf_stat, adf_p, *_ = adfuller(spread.dropna(), maxlag=10, autolag="AIC")
+        spread_stationary = adf_p < 0.05
+
+        # OU half-life: Δspread_t = phi * spread_{t-1} + eps
+        delta_spread = spread.diff()
+        spread_lag   = spread.shift(1)
+        ou_data = pd.concat([delta_spread, spread_lag], axis=1).dropna()
+        ou_data.columns = ["delta", "lag"]
+        phi, _, _, _, _ = stats.linregress(
+            ou_data["lag"].values, ou_data["delta"].values)
+        half_life = np.log(2) / abs(phi) if phi < 0 else np.inf
+
+        # Z-score (full sample, using full-sample mean/std)
+        z_score = (spread - spread.mean()) / spread.std()
+        freq_1sd = (z_score.abs() > 1.0).mean() * 100
+        freq_2sd = (z_score.abs() > 2.0).mean() * 100
+
+        coint_p = coint_results.get(f"{a}–{b}", {}).get("p", np.nan)
+        hl_hrs  = half_life * 15 / 60
+
+        print(f"\n  [{a}–{b}]")
+        print(f"    β = {beta:.4f}   α = {alpha:.6f}   R² = {r_val**2:.4f}")
+        print(f"    Spread ADF: stat={adf_stat:.4f}  p={adf_p:.4f}  "
+              f"→ {'stationary ✓' if spread_stationary else 'non-stationary ✗'}")
+        print(f"    Half-life  = {half_life:.1f} bars  ({hl_hrs:.1f} hours)")
+        print(f"    |z| > 1σ   = {freq_1sd:.1f}% of bars")
+        print(f"    |z| > 2σ   = {freq_2sd:.1f}% of bars")
+
+        summary_rows.append({
+            "Pair": f"{a}–{b}",
+            "Beta": beta, "Alpha": alpha, "R_squared": r_val**2,
+            "Coint_p": coint_p,
+            "Spread_ADF_stat": adf_stat, "Spread_ADF_p": adf_p,
+            "Spread_stationary": spread_stationary,
+            "Half_life_bars": half_life, "Half_life_hours": hl_hrs,
+            "Pct_above_1sd": freq_1sd, "Pct_above_2sd": freq_2sd,
+        })
+
+        # Plot: spread (left axis) + z-score (right axis)
+        ax  = axes[idx]
+        ax2 = ax.twinx()
+        ax.plot(spread.index, spread.values, linewidth=0.5,
+                color="steelblue", alpha=0.8, label="Spread")
+        ax.axhline(spread.mean(), color="black", linewidth=0.8,
+                   linestyle="--", label="Mean")
+        ax2.plot(z_score.index, z_score.values, linewidth=0.3,
+                 color="grey", alpha=0.35, label="Z-score")
+        for thresh, clr in [(2.0, "red"), (1.0, "orange")]:
+            ax2.axhline( thresh, color=clr, linewidth=0.6, linestyle=":", alpha=0.7)
+            ax2.axhline(-thresh, color=clr, linewidth=0.6, linestyle=":", alpha=0.7)
+        ax.set_title(
+            f"{a}–{b}  β={beta:.3f}  half-life={half_life:.0f} bars"
+            f"  ADF p={adf_p:.3f}", fontsize=10)
+        ax.set_ylabel("Spread", fontsize=8)
+        ax2.set_ylabel("Z-score", fontsize=8)
+        ax.grid(True, alpha=0.2)
+        lines1, labels1 = ax.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax.legend(lines1 + lines2, labels1 + labels2, fontsize=7, loc="upper right")
+
+    fig.suptitle("Pairs Trading: Log-Price Spreads with Z-score Bands",
+                 fontsize=12)
+    plt.tight_layout()
+    fig.autofmt_xdate()
+    path_fig = os.path.join(FIGURES_DIR, "pairs_spreads.png")
+    fig.savefig(path_fig, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"\n  Saved: {path_fig}")
+
+    # Summary table
+    summary_df = pd.DataFrame(summary_rows).set_index("Pair")
+    path_csv = os.path.join(TABLES_DIR, "pairs_summary.csv")
+    summary_df.to_csv(path_csv, float_format="%.4f")
+    print(f"  Saved: {path_csv}")
+
+    # Pair selection recommendation
+    print("\n  PAIR SELECTION:")
+    valid = summary_df[summary_df["Spread_stationary"]].copy()
+    if valid.empty:
+        print("  WARNING: No pair has a stationary spread — review data or model.")
+    else:
+        valid_sorted = valid.sort_values("Coint_p")
+        winner = valid_sorted.index[0]
+        hl  = valid_sorted.loc[winner, "Half_life_bars"]
+        hl_h = valid_sorted.loc[winner, "Half_life_hours"]
+        beta_w = valid_sorted.loc[winner, "Beta"]
+        cp   = valid_sorted.loc[winner, "Coint_p"]
+        print(f"  → Selected pair : {winner}")
+        print(f"    β (hedge ratio) = {beta_w:.4f}")
+        print(f"    Half-life       = {hl:.1f} bars  ({hl_h:.1f} hours)")
+        print(f"    Cointegration p = {cp:.4f}")
+        print(f"    Suggested entry/exit z-thresholds: ±2.0σ / ±0.5σ")
+        print(f"    Suggested rolling z-score window: ~{int(hl * 2)} bars")
+
+
+# ============================================================
+# Step 17 — Pairs: Z-Score Distribution
+# ============================================================
+
+def pairs_zscore_distribution(log_prices: pd.DataFrame) -> None:
+    """Visualise z-score distribution for each pair to assess signal frequency."""
+    print("\n" + "=" * 60)
+    print("Step 17 — Z-Score Distribution Analysis")
+    print("=" * 60)
+
+    candidate_pairs = [("BTC", "ETH"), ("BTC", "DOGE"), ("ETH", "DOGE")]
+    cutoff = pd.Timestamp("2026-01-01", tz="UTC")
+
+    fig, axes = plt.subplots(1, len(candidate_pairs), figsize=(15, 5))
+
+    for ax, (a, b) in zip(axes, candidate_pairs):
+        lp_a = log_prices[a].dropna()
+        lp_b = log_prices[b].dropna()
+        common = lp_a.index.intersection(lp_b.index)
+        lp_a, lp_b = lp_a[common], lp_b[common]
+
+        is_mask = common < cutoff
+        slope, intercept, _, _, _ = stats.linregress(
+            lp_b[is_mask].values, lp_a[is_mask].values)
+        spread  = lp_a - slope * lp_b - intercept
+        z_score = (spread - spread.mean()) / spread.std()
+
+        ax.hist(z_score.dropna(), bins=200, density=True,
+                color="steelblue", alpha=0.7, edgecolor="none")
+        x = np.linspace(-5, 5, 400)
+        ax.plot(x, stats.norm.pdf(x, 0, 1), "k--", linewidth=1.0, label="N(0,1)")
+        for thresh, clr in [(1, "orange"), (2, "red")]:
+            ax.axvline( thresh, color=clr, linestyle=":", linewidth=1.0)
+            ax.axvline(-thresh, color=clr, linestyle=":", linewidth=1.0)
+
+        pct1 = (z_score.abs() > 1).mean() * 100
+        pct2 = (z_score.abs() > 2).mean() * 100
+        ax.text(0.97, 0.97,
+                f"|z|>1σ: {pct1:.1f}%\n|z|>2σ: {pct2:.1f}%",
+                transform=ax.transAxes, fontsize=8, ha="right", va="top",
+                bbox=dict(boxstyle="round", alpha=0.1, facecolor="white"))
+        ax.set_xlim(-5, 5)
+        ax.set_xlabel("Z-score")
+        ax.set_ylabel("Density")
+        ax.set_title(f"{a}–{b} Spread Z-Score")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.25)
+
+        print(f"  [{a}–{b}]  |z|>1σ: {pct1:.1f}%   |z|>2σ: {pct2:.1f}%")
+
+    plt.tight_layout()
+    path = os.path.join(FIGURES_DIR, "pairs_zscore_distributions.png")
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"\n  Saved: {path}")
 
 
 # ============================================================
@@ -683,6 +946,12 @@ def main():
     breakout_diagnostics(df)            # Step 11
     print_conclusions(df)               # Step 12
     save_outputs_summary()              # Step 13
+
+    # ── Pairs Trading EDA Extension ──────────────────────────
+    log_prices  = pairs_log_price_unit_roots(df)      # Step 14
+    coint_res   = pairs_cointegration_tests(log_prices)  # Step 15
+    pairs_spread_analysis(log_prices, coint_res)      # Step 16
+    pairs_zscore_distribution(log_prices)             # Step 17
 
     print("\nEDA complete.")
 

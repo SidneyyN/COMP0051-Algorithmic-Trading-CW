@@ -207,3 +207,148 @@ The project focuses on comparing two distinct trading paradigms:
 - **Mean Reversion (Pairs Trading)**
 
 This allows for a clear and well-motivated analysis of how different strategies perform under varying market conditions.
+
+## 10. Pairs Trading Validation (EDA Extension)
+
+### 10.1 Unit Root Tests on Prices
+- Augmented Dickey-Fuller (ADF) tests applied to log prices:
+  - BTC: p = 0.9500 → non-stationary
+  - ETH: p = 0.9162 → non-stationary
+  - DOGE: p = 0.8997 → non-stationary
+
+👉 Conclusion:
+- All price series are non-stationary (I(1)), satisfying the prerequisite for cointegration analysis
+
+---
+
+### 10.2 Cointegration Tests (Engle-Granger)
+
+- BTC–ETH: p = 0.0065 → cointegrated ✅
+- BTC–DOGE: p = 0.6202 → not cointegrated ❌
+- ETH–DOGE: p = 0.6190 → not cointegrated ❌
+
+👉 Conclusion:
+- Only BTC–ETH exhibits a statistically significant long-run equilibrium relationship
+- This pair is selected as the candidate for pairs trading
+
+---
+
+### 10.3 Spread Construction
+
+- Spread defined as:
+  spread_t = log(P_BTC) − β · log(P_ETH)
+
+- Estimated hedge ratio:
+  - β = 0.6780
+  - R² = 0.9451 (strong fit)
+
+👉 Interpretation:
+- BTC and ETH share a strong linear relationship
+- The spread represents deviations from this equilibrium
+
+---
+
+### 10.4 Stationarity of Spread
+
+- ADF test on BTC–ETH spread:
+  - p = 0.0015 → stationary ✅
+
+👉 Conclusion:
+- Spread is mean-reverting
+- Valid signal for pairs trading
+
+---
+
+### 10.5 Mean Reversion Speed (Half-Life)
+
+- Estimated half-life:
+  - 392.4 bars ≈ 98.1 hours (~4 days)
+
+👉 Interpretation:
+- Mean reversion exists but is slow
+- Strategy should be treated as a **low-frequency / multi-day trading strategy**
+- Not suitable for short-horizon trading
+
+---
+
+### 10.6 Z-Score Behaviour
+
+- BTC–ETH:
+  - |z| > 1σ: 31.0%
+  - |z| > 2σ: 5.4%
+
+👉 Interpretation:
+- Sufficient number of trading opportunities
+- Signals are not overly frequent, consistent with slow mean reversion
+
+---
+
+### 10.7 Final Pairs Trading Decision
+
+- Selected pair: BTC–ETH
+- Cointegration confirmed
+- Spread is stationary and mean-reverting
+- Half-life indicates slow adjustment dynamics
+
+👉 Final Conclusion:
+- BTC–ETH is suitable for pairs trading
+- Strategy must be designed with:
+  - wider entry thresholds (e.g. ±2σ)
+  - longer holding periods
+  - lower turnover to mitigate transaction costs
+
+---
+
+## 11. Strategy Update
+
+### Strategy 1 — Breakout / Trend-Following
+- Remains unchanged
+- Supported by:
+  - volatility clustering
+  - heavy tails
+  - observed price trends
+
+---
+
+### Strategy 2 — Pairs Trading (Final Choice)
+
+- Replaces initial lead-lag idea
+- Based on:
+  - BTC–ETH cointegration
+  - mean-reverting spread
+
+### Key Characteristics
+- Mean-reversion strategy
+- Lower frequency than breakout
+- Longer holding periods (~days)
+- Lower turnover expected
+
+---
+
+## 12. Key Insight (Very Important)
+
+The two strategies now capture fundamentally different market behaviours:
+
+- **Breakout Strategy**
+  - Exploits momentum and trend persistence
+  - Performs better in trending markets
+
+- **Pairs Trading Strategy**
+  - Exploits mean reversion between correlated assets
+  - Performs better in stable or range-bound markets
+
+👉 This contrast provides a strong conceptual framework for the report.
+
+---
+
+## 13. Updated Direction
+
+The coursework now focuses on comparing:
+
+- Momentum (Breakout)
+- Mean Reversion (Pairs Trading)
+
+This allows:
+- richer analysis
+- stronger interpretation of results
+- better discussion of market regimes and strategy suitability

@@ -1,0 +1,4 @@
+Pair,EG_stat,EG_p,Critical_1pct,Critical_5pct,Critical_10pct,Cointegrated_5pct
+BTC–ETH,-4.0290,0.0065,-3.8971,-3.3365,-3.0447,True
+BTC–DOGE,-1.8196,0.6202,-3.8971,-3.3365,-3.0447,False
+ETH–DOGE,-1.8220,0.6190,-3.8971,-3.3365,-3.0447,False

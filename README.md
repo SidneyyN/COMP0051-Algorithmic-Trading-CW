@@ -2,7 +2,9 @@
 
 ## Overview
 
-This project implements two cryptocurrency trading strategies — **Breakout/Trend-Following** and **Lead-Lag/Causal Trading** — backtested on Binance 15-minute OHLCV data. Starting capital is $10,000 USDT with a maximum gross exposure of $100,000 (10x leverage).
+This project implements two cryptocurrency trading strategies — **Breakout/Trend-Following** and **Pairs Trading** — backtested on Binance 15-minute OHLCV data. Starting capital is $10,000 USDT with a maximum gross exposure of $100,000 (10x leverage).
+
+The second strategy was originally designed as a Lead-Lag/Causal strategy. Following EDA, cross-correlation and Granger causality tests showed that the predictive effect of BTC on ETH/DOGE was too small to survive transaction costs. The strategy was therefore replaced with a cointegration-based Pairs Trading approach, which exploits longer-horizon mean reversion between asset pairs rather than short-horizon directional spillovers.
 
 ---
 
@@ -22,7 +24,7 @@ comp0051-coursework/
 │   ├── 02_data_clean.py         # Data cleaning, excess returns, save to parquet
 │   ├── 03_eda.py                # Exploratory data analysis
 │   ├── 04_breakout_strategy.py  # Breakout/trend-following strategy
-│   ├── 05_leadlag_strategy.py   # Lead-lag/causal strategy
+│   ├── 05_pairs_strategy.py     # Pairs trading strategy (cointegration-based)
 │   ├── 06_transaction_costs.py  # Roll model and slippage estimation
 │   ├── 07_performance.py        # PnL, metrics, and final evaluation
 │   └── 08_visualisations.py     # Charts and plots for the report
@@ -31,7 +33,7 @@ comp0051-coursework/
 │   ├── data_utils.py            # Data loading, cleaning, return computation
 │   ├── strategy_base.py         # Base class for strategy interface
 │   ├── breakout.py              # Breakout strategy implementation
-│   ├── leadlag.py               # Lead-lag strategy implementation
+│   ├── pairs.py                 # Pairs trading strategy implementation
 │   ├── costs.py                 # Transaction cost models (Roll, etc.)
 │   ├── performance.py           # Sharpe, Sortino, Calmar, PnL computation
 │   └── portfolio.py             # MVO / position sizing and exposure management
@@ -54,9 +56,9 @@ comp0051-coursework/
 
 ### Frequency
 - **15-minute bars** — chosen because:
-  - Lead-lag effects between BTC and alts typically play out over 15–60 minutes
-  - Enough granularity to capture intraday breakouts
+  - Enough granularity to capture intraday breakouts and short-horizon mean reversion
   - ~17,500 bars per asset over 6 months (well above the 1,000-bar minimum)
+  - Originally selected to capture lead-lag effects (1–4 bar ≈ 15–60 min); cointegration spread dynamics also operate comfortably at this resolution
 
 ### Time Period
 - **September 1, 2025 – February 28, 2026** (6 complete months)
@@ -131,43 +133,55 @@ This approach avoids the instability of full mean-variance optimisation while re
 
 ---
 
-## Strategy 2: Lead-Lag / Causal Trading (Section 2b — 20 pts)
+## Strategy 2: Lead-Lag / Causal Trading → Pairs Trading (Section 2b — 20 pts)
 
-### Economic Rationale
-BTC is the dominant cryptocurrency and tends to be the first to react to market-wide information (macroeconomic news, regulatory events, sentiment shifts). Altcoins like ETH and DOGE often follow with a delay of 1–4 bars at 15-minute frequency. This is due to:
-- BTC's deeper liquidity and tighter spreads attracting informed traders first
-- Algorithmic arbitrageurs not fully closing the gap instantly
-- Retail traders reacting to BTC moves and rotating into alts
+### Original Approach: Lead-Lag
 
-### Signal Construction
-1. **Cross-correlation analysis**: compute rolling cross-correlations between BTC returns and ETH/DOGE returns at lags 1, 2, 3, 4 bars to identify optimal lag
-2. **Granger causality test**: formally test whether BTC returns Granger-cause ETH/DOGE returns (and vice versa) over rolling windows
-3. **Trading signal**: when BTC has a significant return (above a threshold, e.g., > 1 z-score), take a position in the lagging asset in the same direction
-4. **Signal decay**: exit after the expected lag period (e.g., 2–3 bars) or when the lagging asset has "caught up"
+The strategy was originally designed around the hypothesis that BTC acts as a leading indicator for ETH and DOGE. The economic rationale was:
+- BTC's deeper liquidity and tighter spreads attract informed traders first
+- Algorithmic arbitrageurs do not fully close the gap instantly
+- Retail traders react to BTC moves and rotate into alts with a delay of 1–4 bars
 
-### Parameters to Optimise
-- Lag order (1–4 bars)
-- BTC return threshold for triggering a trade
-- Rolling window for cross-correlation / Granger test estimation
-- Exit timing (fixed hold period vs signal-based exit)
+EDA tests performed in `03_eda.py` included:
+- Rolling cross-correlations between BTC returns and ETH/DOGE returns at lags 1–4 bars
+- Granger causality tests (BTC → ETH, BTC → DOGE) at lag orders 1–4
+- Conditional return analysis: average ETH/DOGE forward returns following large BTC moves (z > 1σ)
 
-### Position Sizing
+### Why Lead-Lag Was Abandoned
 
-We adopt a **volatility scaling and exposure cap** approach to ensure robust and interpretable position sizing.
+The EDA results showed that the predictive structure from BTC to ETH/DOGE, while statistically detectable in places, was too economically small to be actionable:
+- Cross-correlations at lag +1 were consistently below 0.03
+- Conditional forward returns at lag 1 were sub-1 basis point on average
+- At realistic transaction costs (5–10 bps), the strategy is expected to be unprofitable
 
-- Positions are scaled inversely with recent volatility (measured using ATR or rolling standard deviation of returns), such that more volatile assets receive smaller allocations.
-- Signal strength (e.g., breakout strength or magnitude of BTC move in lead-lag) can be incorporated as a multiplier to increase exposure when signals are stronger.
-- At each time step, raw position sizes are normalised to satisfy the coursework constraint:
-  \[
-  \sum_i |\theta_t^i| \le 100{,}000
-  \]
-  ensuring total gross exposure does not exceed \$100,000.
+### Revised Approach: Pairs Trading
 
-This approach avoids the instability of full mean-variance optimisation while remaining cost-aware and suitable for high-frequency data. It also reflects practical trading systems, where risk is controlled via volatility targeting and strict exposure limits.
+Following these results, the second strategy was replaced with a **cointegration-based pairs trading** approach. Rather than exploiting short-horizon directional spillovers, pairs trading exploits longer-horizon mean reversion in the spread between two cointegrated assets.
 
-### Assets Traded
-- Signal asset: BTC (observe only, may or may not trade)
-- Trade assets: ETH, DOGE (take positions based on BTC signal)
+#### Economic Rationale
+Crypto assets sharing the same macro drivers (market sentiment, risk appetite, regulatory news) tend to move together over the medium term. When a temporary dislocation widens the spread beyond its historical norm, it is expected to revert. This mean reversion is more persistent than a 1-bar lag effect and is therefore less sensitive to execution slippage.
+
+#### Signal Construction
+1. **Cointegration testing**: Engle-Granger and Johansen tests on all pairs (BTC/ETH, BTC/DOGE, ETH/DOGE) to identify which pair(s) are cointegrated in-sample
+2. **Spread construction**: `spread_t = log(P_A_t) − β · log(P_B_t)`, where β is the OLS hedge ratio estimated in-sample
+3. **Half-life estimation**: fit an Ornstein-Uhlenbeck process to the spread to estimate the mean-reversion half-life; this calibrates the rolling z-score window
+4. **Trading signal**: enter long spread when z-score < −threshold; enter short spread when z-score > +threshold; exit at mean (z-score ≈ 0)
+5. **Rolling cointegration**: periodically re-estimate β and test cointegration to detect regime breaks
+
+#### Parameters to Optimise
+- Pair selection (informed by EDA extension cointegration results)
+- OLS hedge ratio β (estimated in-sample; held fixed or rolling out-of-sample)
+- Entry/exit z-score thresholds
+- Rolling window for z-score normalisation (anchored to OU half-life)
+
+#### Position Sizing
+Pairs trading naturally produces a dollar-neutral position (long one asset, short the other). At each bar, the leg sizes are scaled so that:
+- The gross exposure (|long leg| + |short leg|) does not exceed $100,000
+- Position sizes are scaled down if portfolio value falls below $10,000
+
+#### Assets Traded
+- Best cointegrated pair selected from EDA extension results
+- Dollar-neutral: long the underperforming leg, short the outperforming leg
 
 ---
 
@@ -233,7 +247,7 @@ Cost_t = s × Σ_i |θ_i_t - θ_i_{t-1} × (1 + r_i_{t-1})|
   - Machine learning for signal combination (e.g., random forest on breakout + lead-lag features)
   - Adding more assets to the lead-lag universe
   - Incorporating order flow / volume imbalance data
-- **Market conditions**: breakout works best in volatile trending markets; lead-lag works best when BTC dominance is high and cross-asset correlations are strong but lagged.
+- **Market conditions**: breakout works best in volatile trending markets; pairs trading works best during stable cointegration regimes with clear mean reversion — performance may deteriorate if the cointegrating relationship breaks down (e.g., during idiosyncratic shocks to one asset).
 
 ---
 
@@ -259,7 +273,7 @@ requests         # for downloading data / risk-free rate from FRED
 2. **Data cleaning** → `02_data_clean.py`
 3. **Exploratory analysis** → `03_eda.py` (stationarity, cross-correlations, cointegration)
 4. **Strategy 1** → `04_breakout_strategy.py`
-5. **Strategy 2** → `05_leadlag_strategy.py`
+5. **Strategy 2** → `05_pairs_strategy.py`
 6. **Transaction costs** → `06_transaction_costs.py`
 7. **Performance** → `07_performance.py`
 8. **Visualisations** → `08_visualisations.py`
