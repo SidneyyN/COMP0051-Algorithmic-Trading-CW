@@ -72,13 +72,18 @@ Two cryptocurrency trading strategies backtested on Binance 15-min OHLCV data.
   - Respect $100k gross exposure cap
 
 ### Stage 4 — Pairs Trading Strategy (replaces Lead-Lag)
-- [ ] `04_pairs_strategy.py`
-  - Decision: lead-lag effect too weak to survive costs; replaced with pairs trading
-  - Asset pair(s) selected based on EDA extension cointegration results
-  - Spread = log(P_A) − β·log(P_B), β estimated via OLS in-sample
-  - Signal: enter when spread z-score > threshold, exit at mean-reversion
-  - Rolling z-score with Ornstein-Uhlenbeck half-life for window sizing
-  - Dollar-neutral positioning; gross exposure capped at $100k
+- [x] `05_pairs_strategy.py` — baseline pairs strategy
+  - BTC–ETH pair, β = 0.6780 (OLS in-sample)
+  - Spread = log(BTC) − 0.6780·log(ETH); rolling 100-bar z-score
+  - Entry ±3σ | exit z=0 | stop-loss ±3σ after min-hold | min-hold 24 bars | cooldown 20 bars | time-stop 384 bars
+  - Dollar-neutral: btc_notional = $100k/(1+β), eth_notional = β·btc_notional
+  - Leg-level PnL; proportional cost model; sensitivity sweep 1–20 bps
+  - Outputs: `pairs_backtest.csv`, `pairs_trade_log.csv`, `pairs_performance.csv`, `pairs_cost_sensitivity.csv`, 4 plots
+- [x] `06_pairs_strategy_vol_filter.py` — pairs strategy + volatility filter
+  - All parameters identical to `05_pairs_strategy.py`
+  - Added volatility filter: `spread_vol = spread.diff().rolling(100).std()`, `vol_ref = spread_vol.rolling(200).median()`, entry blocked when `spread_vol ≥ 1.2 × vol_ref`
+  - Filter applied to entry only; exits (mean-reversion, stop, time-stop) are unaffected
+  - Outputs: `vol_filter_backtest.csv`, `vol_filter_trade_log.csv`, `vol_filter_performance.csv`, `vol_filter_cost_sensitivity.csv`, 4 plots (spread plot has 3 panels incl. vol regime panel)
 
 ### Stage 5 — Transaction Costs
 - [ ] `05_transaction_costs.py`
@@ -109,7 +114,7 @@ Two cryptocurrency trading strategies backtested on Binance 15-min OHLCV data.
 
 ## Current Progress
 
-**Overall: ~40%**
+**Overall: ~55%**
 
 | Stage | Status | Notes |
 |-------|--------|-------|
@@ -118,7 +123,7 @@ Two cryptocurrency trading strategies backtested on Binance 15-min OHLCV data.
 | 2 — EDA (core) | Done | `03_eda.py` complete; lead-lag evidence too weak → pivot to pairs trading |
 | 2 — EDA (extension) | Done | Steps 14–17 appended to `03_eda.py`; cointegration, spread, half-life, z-score |
 | 3 — Breakout | Not started | |
-| 4 — Pairs Trading | Not started | Replaces lead-lag strategy |
+| 4 — Pairs Trading | Done | `05_pairs_strategy.py` baseline + `06_pairs_strategy_vol_filter.py` with vol regime filter on entry |
 | 5 — Costs | Not started | |
 | 6 — Performance | Not started | |
 | 7 — Visualisations | Not started | |
@@ -128,16 +133,19 @@ Two cryptocurrency trading strategies backtested on Binance 15-min OHLCV data.
 
 ## Next Actions
 
-1. **Read `PAIRS_STRATEGY_PLAN.md`** — understand the full design spec before implementing
-   - EDA extension outputs (β, half-life, pair selection) are now available in `report/tables/pairs_summary.csv`
+1. **Read `BREAKOUT_STRATEGY_PLAN.md`** — understand the full design spec before implementing `04_breakout_strategy.py`
+   - Then implement per the plan
 
-2. **Write `05_pairs_strategy.py`** — implement pairs trading strategy per plan
-   - Parameters (β, entry ±2σ, exit ±0.5σ, lookback ≈ 2×half-life) from `pairs_summary.csv`
-   - Dollar-neutral positioning; gross exposure capped at $100k
+2. **Write `07_transaction_costs.py`** — Roll model + Corwin-Schultz spread estimation
+   - Roll model: `s = 2 × sqrt(-Cov(Δp_t, Δp_{t-1}))` on close returns
+   - Corwin-Schultz: high-low spread estimator; compute per asset
+   - Compare estimated spreads to the cost sweep assumptions used in strategies
+   - Break-even slippage per strategy
 
-3. **Write `04_breakout_strategy.py`** — implement after pairs strategy is done
-   - Donchian channel + ATR filter + vol-scaled sizing
-   - MVO allocation across BTC/ETH/DOGE; respect $100k gross cap
+3. **Write `08_performance.py`** — combined performance evaluation
+   - Combine pairs + breakout PnL into portfolio-level metrics
+   - Metrics: Sharpe, Sortino, Calmar, total PnL, turnover, avg holding horizon
+   - In-sample vs out-of-sample comparison table
 
 ---
 
@@ -160,11 +168,12 @@ notebooks/
   01_data_download.py     — download klines + FRED (DONE)
   02_data_clean.py        — clean + returns + parquet (IN PROGRESS)
   03_eda.py               — EDA (core done; extension pending — see EDA_EXTENSION.md)
-  04_breakout_strategy.py
-  05_pairs_strategy.py    — pairs trading (replaces leadlag)
-  06_transaction_costs.py
-  07_performance.py
-  08_visualisations.py
+  04_breakout_strategy.py          — breakout/trend-following (not started)
+  05_pairs_strategy.py             — pairs trading BTC–ETH baseline (DONE)
+  06_pairs_strategy_vol_filter.py  — pairs trading + volatility filter on entry (DONE)
+  07_transaction_costs.py          — Roll model + Corwin-Schultz (not started)
+  08_performance.py                — combined performance evaluation (not started)
+  09_visualisations.py             — combined visualisations (not started)
 
 data/
   raw/        — raw CSVs from Binance (one per asset)

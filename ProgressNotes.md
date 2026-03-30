@@ -352,3 +352,42 @@ This allows:
 - richer analysis
 - stronger interpretation of results
 - better discussion of market regimes and strategy suitability
+
+---
+
+## 14. Pairs Trading update 
+
+The pairs trading strategy generates positive gross returns, confirming the presence of a mean-reverting relationship between BTC and ETH. However, the strategy is highly sensitive to transaction costs, with net performance becoming negative under realistic cost assumptions. This is primarily due to frequent trading and short holding periods relative to the estimated half-life of the spread.
+
+The mismatch between the estimated half-life (~4 days) and the observed holding period (~9 hours) suggests that the strategy is capturing short-term noise rather than true mean reversion, leading to excessive turnover and cost drag.
+
+This highlights an important practical limitation of statistical arbitrage strategies: while cointegration provides a valid statistical foundation, profitable implementation depends critically on execution costs and signal horizon alignment.
+
+--- 
+
+## 15. Pairs Trading further update
+
+The strategy exhibits a trade-off between trading frequency and profitability: reducing turnover lowers transaction costs but also reduces total return, leading to marginal or negative net performance.
+
+We have now increase the threshold to enter a trade and decrease the exit threshold to discourage overtrading. We have also introduced cooldown periods after exiting a trade and a minimum holding periods to block premature exits.
+
+The pairs trading strategy demonstrates statistically valid mean reversion, as evidenced by positive gross returns and consistent win rates. However, profitability is highly sensitive to transaction costs. Adjustments to reduce trading frequency significantly lower cost drag, but also reduce overall returns, highlighting a fundamental trade-off between signal strength and opportunity frequency.
+
+This suggests that while cointegration provides a useful statistical foundation, practical implementation requires careful balancing of signal thresholds, execution costs, and market regime dynamics.
+
+The results indicate that the strategy may only be viable in low-cost environments or when combined with execution improvements, such as position scaling or more efficient trade timing.
+
+
+We also tried scaling our trade with confidence, but it didn't work out. It increased our exposure at the worst moments. Large deviations from the mean do not necessarily imply stronger mean reversion in crypto markets; instead, they may reflect structural breaks or regime shifts.
+Scaling positions based on z-score magnitude amplifies exposure during extreme market conditions, increasing risk and degrading performance.
+
+---
+
+## 16. Pairs Trading with Volatility Filter
+
+Introducing a volatility filter reduces trading activity and drawdown, while improving out-of-sample performance. This suggests that high-volatility periods are associated with unstable spread dynamics, where mean-reversion assumptions are less reliable.
+
+Although the filter reduces overall profitability, it enhances robustness by avoiding trades during regimes where the cointegration relationship may temporarily break down.
+
+This highlights a key limitation of statistical arbitrage strategies in crypto markets: deviations from equilibrium are not always mean-reverting, particularly during periods of elevated volatility.
+
