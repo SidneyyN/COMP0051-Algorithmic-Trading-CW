@@ -72,7 +72,12 @@ Two cryptocurrency trading strategies backtested on Binance 15-min OHLCV data.
   - Per-trade win rate via trade_id groupby (not per-bar)
   - IS Sharpe ~1.05, OOS Sharpe ~1.51 (OOS > IS: no overfitting); costs ~38% IS, ~28% OOS of gross
   - Outputs: `breakout_price_bands.png`, `breakout_equity_curve.png`
-- [ ] `05_breakout_extension.py` — extension of breakout strategy (to be defined)
+- [x] `05_breakout_extension.py` — breakout extension: threshold filter + banded vol filter
+  - Three versions compared: Baseline, Test A (threshold only), Test B (threshold + 20–80th pct vol band)
+  - THRESHOLD=0.001 (10 bps), VOL_Q_LOW=0.2, VOL_Q_HIGH=0.8
+  - Test A: IS Sharpe 0.45, OOS Sharpe 1.67 (slightly ↑ vs baseline 1.51); fewer trades, lower costs
+  - Test B: IS Sharpe 0.87 but OOS Sharpe -2.24 — banded vol filter destabilises OOS (overfits IS regime)
+  - Outputs: `breakout_extension_comparison.csv`, 4 plots
 
 ### Stage 4 — Pairs Trading Strategy (replaces Lead-Lag)
 - [x] `06_pairs_strategy.py` — baseline pairs strategy
@@ -117,7 +122,7 @@ Two cryptocurrency trading strategies backtested on Binance 15-min OHLCV data.
 
 ## Current Progress
 
-**Overall: ~65%**
+**Overall: ~70%**
 
 | Stage | Status | Notes |
 |-------|--------|-------|
@@ -126,7 +131,7 @@ Two cryptocurrency trading strategies backtested on Binance 15-min OHLCV data.
 | 2 — EDA (core) | Done | `03_eda.py` complete; lead-lag evidence too weak → pivot to pairs trading |
 | 2 — EDA (extension) | Done | Steps 14–17 appended to `03_eda.py`; cointegration, spread, half-life, z-score |
 | 3 — Breakout (baseline) | Done | `04_breakout_strategy.py` complete; contrarian fade strategy; IS Sharpe 1.05, OOS Sharpe 1.51 |
-| 3 — Breakout (extension) | Not started | `05_breakout_extension.py` — to be defined |
+| 3 — Breakout (extension) | Done | `05_breakout_extension.py`; threshold+vol-band comparison; Test A mild OOS ↑, Test B OOS Sharpe -2.24 |
 | 4 — Pairs Trading | Done | `06_pairs_strategy.py` baseline + `07_pairs_strategy_vol_filter.py` with vol regime filter on entry |
 | 5 — Costs | Not started | |
 | 6 — Performance | Not started | |
@@ -137,11 +142,7 @@ Two cryptocurrency trading strategies backtested on Binance 15-min OHLCV data.
 
 ## Next Actions
 
-1. **Write `05_breakout_extension.py`** — extend the breakout strategy
-   - Decide what the extension adds: e.g. multi-asset (ETH/DOGE), parameter sensitivity sweep, or alternative exit rules
-   - Keep consistent backtesting assumptions with `04_breakout_strategy.py`
-
-2. **Write `08_transaction_costs.py`** — Roll model + Corwin-Schultz spread estimation
+1. **Write `08_transaction_costs.py`** — Roll model + Corwin-Schultz spread estimation
    - Roll model: `s = 2 × sqrt(-Cov(Δp_t, Δp_{t-1}))` on close returns
    - Corwin-Schultz: high-low spread estimator; compute per asset
    - Compare estimated spreads to the cost sweep assumptions used in strategies
@@ -162,6 +163,8 @@ Two cryptocurrency trading strategies backtested on Binance 15-min OHLCV data.
 - Replaced with pairs trading: cointegration-based mean reversion is less sensitive to short-horizon noise
 - Risk-free rate negligible at 15-min frequency (~1.4×10⁻⁵% per bar vs ~0.1–1% crypto moves)
 - Breakout strategy is **contrarian** (fade the breakout), not trend-following: BTC at 15-min frequency mean-reverts after band breaks; confirmed by flipping signals and observing strongly positive gross PnL
+- Breakout extension (Test A): 10 bps threshold marginally improves OOS Sharpe (1.51→1.67) with fewer trades; IS Sharpe drops (1.06→0.45) — suggests baseline was partly trading marginal signals that happen to be profitable IS
+- Breakout extension (Test B): banded vol filter (20th–80th pct) catastrophically harms OOS (Sharpe -2.24); the IS vol-regime structure does not persist OOS — strong evidence against over-filtering
 - Roll model used for spread estimation; Corwin-Schultz as robustness check
 - Gross exposure capped at min($100k, 10 × portfolio_value) at all times
 
@@ -175,7 +178,7 @@ notebooks/
   02_data_clean.py        — clean + returns + parquet (IN PROGRESS)
   03_eda.py               — EDA (core done; extension pending — see EDA_EXTENSION.md)
   04_breakout_strategy.py          — contrarian Donchian breakout, BTC baseline (DONE)
-  05_breakout_extension.py         — breakout strategy extension (not started)
+  05_breakout_extension.py         — breakout extension: threshold + banded vol filter (DONE)
   06_pairs_strategy.py             — pairs trading BTC–ETH baseline (DONE)
   07_pairs_strategy_vol_filter.py  — pairs trading + volatility filter on entry (DONE)
   08_transaction_costs.py          — Roll model + Corwin-Schultz (not started)

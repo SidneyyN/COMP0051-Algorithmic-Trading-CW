@@ -1,0 +1,4 @@
+version,IS net PnL ($),OOS net PnL ($),IS Sharpe,OOS Sharpe,IS Sortino,OOS Sortino,IS trades,OOS trades,IS total cost ($),OOS total cost ($),IS win rate,OOS win rate,IS max DD ($),OOS max DD ($)
+Baseline (04),9121.94,9260.84,1.0577,1.5113,0.6172,0.9871,55.0,36.0,5500.0,3600.0,0.5455,0.6111,-12698.87,-16203.57
+Test A — Threshold,3827.21,9872.83,0.4513,1.6722,0.2563,1.0826,50.0,35.0,5000.0,3500.0,0.56,0.6286,-11566.29,-17586.4
+Test B — Threshold + Vol Band,6701.93,-9406.37,0.8693,-2.235,0.5261,-1.3651,64.0,34.0,6400.0,3400.0,0.5156,0.4412,-13786.75,-15435.47
