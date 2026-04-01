@@ -94,25 +94,29 @@ Two cryptocurrency trading strategies backtested on Binance 15-min OHLCV data.
   - Outputs: `vol_filter_backtest.csv`, `vol_filter_trade_log.csv`, `vol_filter_performance.csv`, `vol_filter_cost_sensitivity.csv`, 4 plots (spread plot has 3 panels incl. vol regime panel)
 
 ### Stage 5 — Transaction Costs
-- [ ] `08_transaction_costs.py`
-  - Roll model: `s = sqrt(-Cov(Δp_t, Δp_{t-1}))`
-  - Corwin-Schultz high-low spread estimator
-  - Sensitivity analysis: Sharpe/PnL across 1bp, 5bp, 10bp, 15bp, 20bp slippage
-  - Break-even slippage per strategy
+- [x] `08_transaction_costs.py`
+  - Roll model: BTC 0.000624, ETH 0.000524, DOGE 0.000993 (scalars, fraction of price)
+  - Corwin-Schultz mean: BTC 7.77 bps, ETH 11.74 bps, DOGE 14.58 bps (time series)
+  - `compute_cost(position, spread, price)` → `delta_pos × spread × price / 2`; flip (+1→-1) costs 2 units correctly
+  - Functions: `load_data`, `roll_spread`, `cs_spread`, `compute_cost`
 
 ### Stage 6 — Performance Evaluation
-- [ ] `09_performance.py`
-  - PnL: `ΔV_t = Σ(θ_i * r_i) - Cost_t`
-  - Metrics: Sharpe, Sortino, Calmar, total PnL, turnover, avg holding horizon
-  - Reinvestment logic (compound profits, scale down if portfolio < $10k)
-  - In-sample vs out-of-sample comparison
+- [x] `09_performance.py`
+  - Loads spread estimates, regenerates positions for both strategies via `importlib`
+  - Breakout IS: Fixed Sharpe 1.38, Roll 1.30, CS 1.18 | OOS: Fixed 1.88, Roll 1.82, CS 1.58
+  - Pairs IS: Fixed Sharpe 0.08, Roll -0.12, CS -0.95 — barely survives fixed costs, unprofitable under Roll/CS
+  - Pairs OOS: Fixed 1.24, Roll 1.04, CS 0.54 — better OOS but highly cost-sensitive
+  - Turnover: breakout 182 total (367 ann.), pairs 116 total (234 ann.)
+  - Cost sensitivity (Roll base): breakout Sharpe stays positive at 2× spread; pairs goes negative at 1.5×
+  - Key insight: pairs trading has too small a gross edge to survive microstructure costs IS
 
 ### Stage 7 — Visualisations
-- [ ] `10_visualisations.py`
-  - Cumulative PnL curve (gross and net)
-  - Drawdown chart
-  - Position/exposure over time
-  - Return distribution histogram
+- [x] `10_visualisations.py`
+  - Cumulative PnL curves (gross vs net, three cost models) — `vis_cumulative_pnl.png`
+  - Drawdown chart (gross + three net cost models) — `vis_drawdown.png`
+  - Position/exposure over time (breakout notional + pairs spread direction) — `vis_positions.png`
+  - Return distribution histograms (IS vs OOS, gross vs net Roll) — `vis_return_distributions.png`
+  - Timezone fix needed: tz-aware UTC index requires `IS_END` localized before use in `axvspan`/`axvline`
 
 ### Stage 8 — Report & Video
 - [ ] `report/report.pdf` — 5-page report
@@ -122,7 +126,7 @@ Two cryptocurrency trading strategies backtested on Binance 15-min OHLCV data.
 
 ## Current Progress
 
-**Overall: ~70%**
+**Overall: ~90%**
 
 | Stage | Status | Notes |
 |-------|--------|-------|
@@ -133,25 +137,18 @@ Two cryptocurrency trading strategies backtested on Binance 15-min OHLCV data.
 | 3 — Breakout (baseline) | Done | `04_breakout_strategy.py` complete; contrarian fade strategy; IS Sharpe 1.05, OOS Sharpe 1.51 |
 | 3 — Breakout (extension) | Done | `05_breakout_extension.py`; threshold+vol-band comparison; Test A mild OOS ↑, Test B OOS Sharpe -2.24 |
 | 4 — Pairs Trading | Done | `06_pairs_strategy.py` baseline + `07_pairs_strategy_vol_filter.py` with vol regime filter on entry |
-| 5 — Costs | Not started | |
-| 6 — Performance | Not started | |
-| 7 — Visualisations | Not started | |
+| 5 — Costs | Done | `08_transaction_costs.py`; Roll + Corwin-Schultz spreads; `compute_cost` function |
+| 6 — Performance | Done | `09_performance.py`; all three cost models × both strategies × IS/OOS; turnover + sensitivity |
+| 7 — Visualisations | Done | `10_visualisations.py`; 4 figures saved to `report/figures/` |
 | 8 — Report/Video | Not started | |
 
 ---
 
 ## Next Actions
 
-1. **Write `08_transaction_costs.py`** — Roll model + Corwin-Schultz spread estimation
-   - Roll model: `s = 2 × sqrt(-Cov(Δp_t, Δp_{t-1}))` on close returns
-   - Corwin-Schultz: high-low spread estimator; compute per asset
-   - Compare estimated spreads to the cost sweep assumptions used in strategies
-   - Break-even slippage per strategy
-
-3. **Write `09_performance.py`** — combined performance evaluation
-   - Combine pairs + breakout PnL into portfolio-level metrics
-   - Metrics: Sharpe, Sortino, Calmar, total PnL, turnover, avg holding horizon
-   - In-sample vs out-of-sample comparison table
+1. **Write report** — 5 pages covering all sections
+   - Key narrative: breakout survives costs (robust edge), pairs is cost-sensitive (marginal IS edge)
+   - Include all figures from `report/figures/`; tables from `report/tables/`
 
 ---
 
@@ -167,6 +164,10 @@ Two cryptocurrency trading strategies backtested on Binance 15-min OHLCV data.
 - Breakout extension (Test B): banded vol filter (20th–80th pct) catastrophically harms OOS (Sharpe -2.24); the IS vol-regime structure does not persist OOS — strong evidence against over-filtering
 - Roll model used for spread estimation; Corwin-Schultz as robustness check
 - Gross exposure capped at min($100k, 10 × portfolio_value) at all times
+- Breakout is cost-robust: gross edge large enough that even CS spreads leave Sharpe >1.18 IS and >1.58 OOS
+- Pairs IS edge too small: gross PnL $1,924 barely exceeds fixed cost $1,759; negative net PnL under Roll/CS IS
+- Pairs OOS looks better (fixed Sharpe 1.24) but sensitivity sweep shows it breaks at ~1.5× Roll spread
+- Pairs cost sensitivity used pre-computed base cost series scaled by multiplier (avoids two-leg price indexing issue)
 
 ---
 
@@ -181,9 +182,9 @@ notebooks/
   05_breakout_extension.py         — breakout extension: threshold + banded vol filter (DONE)
   06_pairs_strategy.py             — pairs trading BTC–ETH baseline (DONE)
   07_pairs_strategy_vol_filter.py  — pairs trading + volatility filter on entry (DONE)
-  08_transaction_costs.py          — Roll model + Corwin-Schultz (not started)
-  09_performance.py                — combined performance evaluation (not started)
-  10_visualisations.py             — combined visualisations (not started)
+  08_transaction_costs.py          — Roll model + Corwin-Schultz (DONE)
+  09_performance.py                — combined performance evaluation (DONE)
+  10_visualisations.py             — combined visualisations (DONE)
 
 data/
   raw/        — raw CSVs from Binance (one per asset)

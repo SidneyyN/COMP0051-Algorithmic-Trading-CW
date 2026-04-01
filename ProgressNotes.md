@@ -391,3 +391,6 @@ Although the filter reduces overall profitability, it enhances robustness by avo
 
 This highlights a key limitation of statistical arbitrage strategies in crypto markets: deviations from equilibrium are not always mean-reverting, particularly during periods of elevated volatility.
 
+## Transaction Costs
+
+This study demonstrates that incorporating realistic transaction cost models fundamentally alters the evaluation of trading strategies. While both breakout and pairs trading strategies exhibit statistically profitable behaviour in a frictionless setting, only the breakout strategy remains economically viable after accounting for market microstructure effects. The pairs trading strategy, despite a high win rate, is rendered unprofitable due to its reliance on small price discrepancies that are overwhelmed by transaction costs. These findings highlight the critical importance of cost-aware modelling and reinforce that trading strategies must be evaluated based on net, rather than gross, performance.
