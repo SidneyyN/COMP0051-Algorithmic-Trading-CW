@@ -1,0 +1,7 @@
+strategy,cost_model,winner_params,is_sharpe,oos_sharpe,full_sharpe,is_net_pnl,oos_net_pnl,full_net_pnl,is_n_trades,oos_n_trades,full_n_trades
+breakout,fixed,"{'N': np.int64(150), 'vol_window': np.int64(30), 'vol_quantile': np.float64(0.6), 'max_hold': np.int64(60)}",1.9523,-0.2369,1.0828,20447.26,-1606.17,18841.08,140.0,78.0,218.0
+breakout,roll,"{'N': np.int64(150), 'vol_window': np.int64(30), 'vol_quantile': np.float64(0.6), 'max_hold': np.int64(60)}",1.869,-0.2929,1.0108,19575.33,-1986.16,17589.16,140.0,78.0,218.0
+breakout,cs,"{'N': np.int64(150), 'vol_window': np.int64(30), 'vol_quantile': np.float64(0.6), 'max_hold': np.int64(60)}",1.8112,-0.3345,0.9599,18983.91,-2269.78,16714.14,140.0,78.0,218.0
+pairs,fixed,"{'coint_window': None, 'zscore_window': np.int64(75), 'entry_z': np.float64(3.5), 'exit_z': np.float64(0.0), 'stop_z': np.float64(3.0), 'vol_mult': np.float64(1.5)}",1.4109,-0.0602,0.9472,2704.93,-53.02,2651.91,27.0,21.0,48.0
+pairs,roll,"{'coint_window': None, 'zscore_window': np.int64(75), 'entry_z': np.float64(3.5), 'exit_z': np.float64(0.0), 'stop_z': np.float64(3.0), 'vol_mult': np.float64(1.5)}",1.2341,-0.3152,0.7459,2368.16,-277.98,2090.19,27.0,21.0,48.0
+pairs,cs,"{'coint_window': None, 'zscore_window': np.int64(75), 'entry_z': np.float64(3.5), 'exit_z': np.float64(0.0), 'stop_z': np.float64(3.0), 'vol_mult': np.float64(1.5)}",0.3264,-1.2737,-0.1766,642.11,-1149.18,-507.07,27.0,21.0,48.0

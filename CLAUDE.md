@@ -118,7 +118,43 @@ Two cryptocurrency trading strategies backtested on Binance 15-min OHLCV data.
   - Return distribution histograms (IS vs OOS, gross vs net Roll) — `vis_return_distributions.png`
   - Timezone fix needed: tz-aware UTC index requires `IS_END` localized before use in `axvspan`/`axvline`
 
-### Stage 8 — Report & Video
+### Stage 8 — Hyperparameter Search
+- [x] `11_hyperparameter_search.py` — Random Search + Successive Halving (SHA) for both strategies
+  - Algorithm: η=3, 27 initial configs → SHA rounds (1/3 IS → 2/3 IS → full IS), 39 evaluations per strategy
+  - **Breakout search space** (4 params): N ∈ [100,150,200,300,400], vol_window ∈ [30,50,75,100], vol_quantile ∈ [0.4–0.8], max_hold ∈ [20,40,60,100]
+  - **Pairs search space** (6 params): coint_window ∈ [500,1000,2000,None], zscore_window ∈ [50–200], entry_z ∈ [2.0–3.5], exit_z ∈ [0.0–1.0], stop_z ∈ [2.5–5.0], vol_mult ∈ [1.0–2.0]
+  - `coint_window` is a new parameter: rolling OLS beta estimation window (None = static OLS on IS, same semantics as baseline)
+  - SHA evaluation uses fixed 5 bps cost for speed; final validation uses all three cost models (Fixed, Roll, CS)
+  - **Breakout winner**: N=150, vol_window=30, vol_quantile=0.6, max_hold=60
+  - **Pairs winner**: coint_window=None, zscore_window=75, entry_z=3.5, exit_z=0.0, stop_z=3.0, vol_mult=1.5
+  - **Key finding**: SHA winner improves IS Sharpe for both strategies but OOS collapses — baseline hand-picked params are more robust (breakout baseline full-period Roll Sharpe 1.49 vs winner 1.01; pairs baseline OOS Roll Sharpe 1.19 vs winner -0.32)
+  - Full side-by-side comparison printed (IS / OOS / full period × 3 cost models × 9 metrics) with delta column
+  - Outputs:
+    - `report/tables/breakout_hparam_results.csv` — 39-row SHA search log
+    - `report/tables/pairs_hparam_results.csv` — 39-row SHA search log
+    - `report/tables/hparam_summary.csv` — winner metrics per cost model
+    - `report/tables/baseline_vs_winner_comparison.csv` — full flat comparison table
+    - `report/figures/hparam_sha_sharpe_distribution.png` — boxplot of Sharpe per SHA round
+    - `report/figures/hparam_is_vs_oos_sharpe.png` — winner IS vs OOS by cost model
+    - `report/figures/hparam_winner_cumulative_pnl.png` — winner cumulative PnL (matches `vis_cumulative_pnl.png` style)
+    - `report/figures/hparam_baseline_vs_winner_sharpe.png` — grouped bar chart baseline vs winner
+
+### Stage 9 — Walk-Forward Validation
+- [x] `12_walk_forward.py` — Expanding-window WFV, 3 monthly test folds, baseline vs SHA winner
+  - Fold structure: Train Sep–Nov → Test Dec | Train Sep–Dec → Test Jan | Train Sep–Jan → Test Feb
+  - Per-fold calibration: vol_threshold (breakout) and OLS beta (pairs) fit on train window only
+  - Transaction costs: Roll model scalars (BTC 0.000624, ETH 0.000524), same as notebook 09
+  - **Fold 2 sanity check passes**: Breakout baseline Sharpe 1.8148 ≈ notebook 09 OOS Roll 1.82
+  - **Breakout results**: Baseline mean Sharpe 3.72 ± 3.32 (all folds positive: 7.56, 1.81, 1.80); SHA winner 1.82 ± 3.37 (goes negative fold 3: -0.97)
+  - **Pairs results**: Baseline mean Sharpe 1.55 ± 1.33 (all positive: 3.03, 1.17, 0.46); SHA winner -0.84 ± 1.15 (negative in 2/3 folds)
+  - **Beta stability confirmed**: fold betas (0.617, 0.678, 0.688) all close to static 0.6780, supporting coint_window=None
+  - **Key finding**: WFV multi-fold evidence is stronger than single IS/OOS split — baseline consistently outperforms SHA winner across all folds; SHA overfitting to IS period is systematic, not period-specific
+  - Outputs:
+    - `report/tables/wfv_results.csv` — per-fold × config × metric table
+    - `report/figures/wfv_sharpe_by_fold.png` — grouped bar chart by fold
+    - `report/figures/wfv_cumulative_pnl.png` — cumulative OOS PnL with fold boundaries
+
+### Stage 10 — Report & Video
 - [ ] `report/report.pdf` — 5-page report
 - [ ] 60-second video presentation
 
@@ -126,7 +162,7 @@ Two cryptocurrency trading strategies backtested on Binance 15-min OHLCV data.
 
 ## Current Progress
 
-**Overall: ~90%**
+**Overall: ~97%**
 
 | Stage | Status | Notes |
 |-------|--------|-------|
@@ -140,7 +176,9 @@ Two cryptocurrency trading strategies backtested on Binance 15-min OHLCV data.
 | 5 — Costs | Done | `08_transaction_costs.py`; Roll + Corwin-Schultz spreads; `compute_cost` function |
 | 6 — Performance | Done | `09_performance.py`; all three cost models × both strategies × IS/OOS; turnover + sensitivity |
 | 7 — Visualisations | Done | `10_visualisations.py`; 4 figures saved to `report/figures/` |
-| 8 — Report/Video | Not started | |
+| 8 — Hyperparameter Search | Done | `11_hyperparameter_search.py`; SHA random search; winner IS Sharpe ↑ but baseline more robust OOS |
+| 9 — Walk-Forward Validation | Done | `12_walk_forward.py`; 3 expanding folds; baseline beats SHA winner in all folds |
+| 10 — Report/Video | Not started | |
 
 ---
 
@@ -148,6 +186,8 @@ Two cryptocurrency trading strategies backtested on Binance 15-min OHLCV data.
 
 1. **Write report** — 5 pages covering all sections
    - Key narrative: breakout survives costs (robust edge), pairs is cost-sensitive (marginal IS edge)
+   - Hyperparameter search narrative: SHA winner improves IS Sharpe but baseline parameters are more OOS-robust — illustrates overfitting risk of IS-only optimisation
+   - WFV narrative: 3-fold expanding window confirms baseline robustness; SHA winner goes negative in multiple folds; beta stability (0.617–0.688) validates static OLS choice
    - Include all figures from `report/figures/`; tables from `report/tables/`
 
 ---
@@ -168,6 +208,9 @@ Two cryptocurrency trading strategies backtested on Binance 15-min OHLCV data.
 - Pairs IS edge too small: gross PnL $1,924 barely exceeds fixed cost $1,759; negative net PnL under Roll/CS IS
 - Pairs OOS looks better (fixed Sharpe 1.24) but sensitivity sweep shows it breaks at ~1.5× Roll spread
 - Pairs cost sensitivity used pre-computed base cost series scaled by multiplier (avoids two-leg price indexing issue)
+- SHA hyperparameter search confirms IS overfitting risk: winner configs improve IS Sharpe substantially but collapse OOS; hand-picked baseline params act as implicit regularisation
+- `coint_window=None` (static OLS on IS) outperforms rolling OLS windows in the pairs search — suggests the BTC–ETH cointegration relationship is stable enough that re-estimation adds noise rather than adaptability
+- WFV (3 expanding folds) provides stronger evidence than single IS/OOS split: breakout baseline Sharpe positive across all folds (7.56, 1.81, 1.80); SHA winner goes negative in fold 3 (-0.97); pairs baseline positive all folds, SHA winner negative in 2/3. The Dec fold Sharpe of 7.56 is an outlier (strong trending month) — mean ± std (3.72 ± 3.32) gives a more honest picture than single OOS (1.82)
 
 ---
 
@@ -176,8 +219,8 @@ Two cryptocurrency trading strategies backtested on Binance 15-min OHLCV data.
 ```
 notebooks/
   01_data_download.py     — download klines + FRED (DONE)
-  02_data_clean.py        — clean + returns + parquet (IN PROGRESS)
-  03_eda.py               — EDA (core done; extension pending — see EDA_EXTENSION.md)
+  02_data_clean.py        — clean + returns + parquet (DONE)
+  03_eda.py               — EDA core + pairs trading diagnostics extension, steps 1–17 (DONE)
   04_breakout_strategy.py          — contrarian Donchian breakout, BTC baseline (DONE)
   05_breakout_extension.py         — breakout extension: threshold + banded vol filter (DONE)
   06_pairs_strategy.py             — pairs trading BTC–ETH baseline (DONE)
@@ -185,6 +228,8 @@ notebooks/
   08_transaction_costs.py          — Roll model + Corwin-Schultz (DONE)
   09_performance.py                — combined performance evaluation (DONE)
   10_visualisations.py             — combined visualisations (DONE)
+  11_hyperparameter_search.py      — SHA random search + baseline vs winner comparison (DONE)
+  12_walk_forward.py               — expanding-window WFV, 3 folds, baseline vs SHA winner (DONE)
 
 data/
   raw/        — raw CSVs from Binance (one per asset)
