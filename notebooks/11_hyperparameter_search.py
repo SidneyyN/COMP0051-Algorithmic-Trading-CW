@@ -345,6 +345,9 @@ def validate_winner_breakout(winner_cfg: dict, df_all: pd.DataFrame,
         is_m   = breakout_mod.compute_metrics(df[is_mask],  BARS_PER_YEAR)
         oos_m  = breakout_mod.compute_metrics(df[oos_mask], BARS_PER_YEAR)
         full_m = breakout_mod.compute_metrics(df,           BARS_PER_YEAR)
+        is_m.update(_extra_metrics(df[is_mask]))
+        oos_m.update(_extra_metrics(df[oos_mask]))
+        full_m.update(_extra_metrics(df))
         results[name] = (is_m, oos_m, full_m)
 
     return results
@@ -416,6 +419,9 @@ def validate_winner_pairs(winner_cfg: dict, df_all: pd.DataFrame,
         is_m   = pairs_mod.compute_metrics(df[is_mask],  is_trades,  label="in-sample")
         oos_m  = pairs_mod.compute_metrics(df[oos_mask], oos_trades, label="out-of-sample")
         full_m = pairs_mod.compute_metrics(df,           trades,     label="full")
+        is_m.update(_extra_metrics(df[is_mask]))
+        oos_m.update(_extra_metrics(df[oos_mask]))
+        full_m.update(_extra_metrics(df))
         results[name] = (is_m, oos_m, full_m)
 
     return results
@@ -667,15 +673,18 @@ def plot_is_oos_comparison(b_results: dict, p_results: dict) -> None:
 # ============================================================
 
 _METRIC_LABELS = [
-    ("sharpe",         "Sharpe ratio",    "{:>10.4f}",  "{:>+10.4f}"),
-    ("sortino",        "Sortino ratio",   "{:>10.4f}",  "{:>+10.4f}"),
-    ("calmar",         "Calmar ratio",    "{:>10.4f}",  "{:>+10.4f}"),
-    ("total_net_$",    "Net PnL ($)",     "{:>10,.0f}", "{:>+10,.0f}"),
-    ("total_gross_$",  "Gross PnL ($)",   "{:>10,.0f}", "{:>+10,.0f}"),
-    ("total_cost_$",   "Total costs ($)", "{:>10,.0f}", "{:>+10,.0f}"),
-    ("max_drawdown_$", "Max DD ($)",      "{:>10,.0f}", "{:>+10,.0f}"),
-    ("n_trades",       "N trades",        "{:>10}",     "{:>+10}"),
-    ("win_rate",       "Win rate",        "{:>10.2%}",  "{:>+10.2%}"),
+    ("sharpe",         "Sharpe ratio",     "{:>10.4f}",  "{:>+10.4f}"),
+    ("sortino",        "Sortino ratio",    "{:>10.4f}",  "{:>+10.4f}"),
+    ("calmar",         "Calmar ratio",     "{:>10.4f}",  "{:>+10.4f}"),
+    ("total_net_$",    "Net PnL ($)",      "{:>10,.0f}", "{:>+10,.0f}"),
+    ("total_gross_$",  "Gross PnL ($)",    "{:>10,.0f}", "{:>+10,.0f}"),
+    ("total_cost_$",   "Total costs ($)",  "{:>10,.0f}", "{:>+10,.0f}"),
+    ("pct_return",     "Return on cap (%)","{:>10.2f}",  "{:>+10.2f}"),
+    ("max_drawdown_$", "Max DD ($)",       "{:>10,.0f}", "{:>+10,.0f}"),
+    ("n_trades",       "N trades",         "{:>10}",     "{:>+10}"),
+    ("win_rate",       "Win rate",         "{:>10.2%}",  "{:>+10.2%}"),
+    ("total_turnover", "Total turnover",   "{:>10.0f}",  "{:>+10.0f}"),
+    ("avg_hold_bars",  "Avg hold (bars)",  "{:>10.1f}",  "{:>+10.1f}"),
 ]
 
 
@@ -686,6 +695,37 @@ def _fmt(val, fmt_str):
         return fmt_str.format(val)
     except (ValueError, TypeError):
         return f"{val:>10}"
+
+
+def _extra_metrics(df_slice: pd.DataFrame, capital: float = CAPITAL) -> dict:
+    """
+    Compute three additional metrics not returned by strategy compute_metrics:
+      - total_turnover : sum of absolute position changes (flip +1→-1 counts as 2)
+      - avg_hold_bars  : mean bars per complete trade, via trade_id groupby
+      - pct_return     : net PnL as % of initial capital
+
+    avg_hold uses the same trade_id logic as notebook 04 compute_metrics:
+      - assign an incrementing ID each time position goes from 0 → non-zero
+      - count bars per trade_id, then average
+    This avoids the shift-on-slice edge case and is robust to OOS slices where
+    a carry-over trade from IS would otherwise be miscounted as a new entry.
+    """
+    pos = df_slice["position"]
+    total_turnover = pos.diff().abs().fillna(0).sum()
+
+    # Trade_id: increment on each 0 → non-zero transition
+    trade_entry = (pos != 0) & (pos.shift(1).fillna(0) == 0)
+    trade_id    = trade_entry.cumsum().where(pos != 0)   # NaN when flat
+    bars_per_trade = trade_id.dropna().groupby(trade_id.dropna()).count()
+    avg_hold = round(float(bars_per_trade.mean()), 1) if len(bars_per_trade) > 0 else float("nan")
+
+    pct_return = round(df_slice["net_pnl"].sum() / capital * 100, 2)
+
+    return {
+        "total_turnover": float(total_turnover),
+        "avg_hold_bars":  avg_hold,
+        "pct_return":     pct_return,
+    }
 
 
 def print_full_evaluation(strategy: str, base_val: dict, win_val: dict) -> None:
